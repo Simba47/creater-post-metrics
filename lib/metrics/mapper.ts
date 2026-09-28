@@ -54,6 +54,14 @@ function count(v: unknown): number | null {
   return null;
 }
 
+/**
+ * When the creator hides likes, Instagram still sends a like_count, but it's a placeholder
+ * (observed: 2 or 3 on posts with thousands of views), so it's treated as unknown.
+ */
+function likes(raw: Raw): number | null {
+  return raw.like_and_view_counts_disabled === true ? null : count(raw.like_count);
+}
+
 function int(v: unknown): number | null {
   return typeof v === "number" && Number.isInteger(v) ? v : null;
 }
@@ -88,7 +96,7 @@ export function mapV2Media(raw: Raw): NormalizedMetrics {
     product_type: str(raw.product_type),
     caption: str(caption?.text),
     taken_at: timestamp(raw.taken_at),
-    like_count: count(raw.like_count),
+    like_count: likes(raw),
     comment_count: count(raw.comment_count),
     play_count: count(coalesce(raw.play_count, raw.view_count)),
     ig_play_count: count(raw.ig_play_count),
@@ -118,7 +126,7 @@ export function mapV1Media(raw: Raw): NormalizedMetrics {
     // Verified: v1 uses caption_text and an ISO taken_at (plus taken_at_ts); v2 names are fallbacks.
     caption: str(coalesce(raw.caption_text, caption?.text)),
     taken_at: timestamp(coalesce(raw.taken_at_ts, raw.taken_at)),
-    like_count: count(raw.like_count),
+    like_count: likes(raw),
     comment_count: count(raw.comment_count),
     // Verified: v1 sends view_count: 0 next to a real play_count, so a 0 view_count means "unknown".
     play_count: count(coalesce(raw.play_count, raw.view_count === 0 ? null : raw.view_count)),

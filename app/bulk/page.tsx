@@ -481,7 +481,8 @@ export default function BulkPage() {
                   Force refresh
                 </label>
                 <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Uses up to {toFetch.length} HikerAPI requests. Posts fetched recently are reused for free
+                  Uses about {toFetch.length} HikerAPI requests, plus one per post with hidden likes (to get the real
+                  count). Posts fetched recently are reused for free
                   {force ? " (except with Force refresh)" : ""}.
                 </span>
               </div>

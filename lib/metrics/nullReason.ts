@@ -12,7 +12,8 @@ export function nullReason(
   const fromV1 = flags.source_endpoint === "v1_by_url";
   switch (metric) {
     case "likes":
-      return flags.likes_hidden ? HIDDEN : NOT_PUBLIC;
+      // Hidden likes are normally recovered from the likers list; null means that lookup failed.
+      return flags.likes_hidden ? `${HIDDEN}. Couldn't look up the real count this time. Try Force refresh later.` : NOT_PUBLIC;
     case "views":
       // like_and_view_counts_disabled hides views as well as likes.
       return flags.likes_hidden ? HIDDEN : `${NOT_PUBLIC} (photos and carousels don't report views)`;

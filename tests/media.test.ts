@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHikerClient, parseJsonSafeInts, type HikerCallLog } from "@/lib/hiker/client";
-import { completeness, getMediaByUrl, V1_BY_URL, V2_BY_URL } from "@/lib/hiker/media";
+import { completeness, getLikerCount, getMediaByUrl, V1_BY_URL, V2_BY_URL, V2_LIKERS } from "@/lib/hiker/media";
 import { AppError } from "@/lib/errors";
 
 const URL_IN = "https://www.instagram.com/p/C8xYz12AbCd/";
@@ -251,6 +251,26 @@ describe("getMediaByUrl — saves/reposts completeness retries", () => {
     const { client, calls } = makeClient({ [V2_BY_URL]: [body(bare)] });
     await getMediaByUrl(client, URL_IN, undefined, { completenessRetries: 0 });
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("getLikerCount", () => {
+  it("returns user_count from the likers endpoint", async () => {
+    const { client, calls } = makeClient({ [V2_LIKERS]: [{ status: 200, body: { users: [], user_count: 319 } }] });
+    await expect(getLikerCount(client, "3993928453471877442")).resolves.toBe(319);
+    expect(calls[0]!.searchParams.get("id")).toBe("3993928453471877442");
+  });
+
+  it("returns null instead of throwing when the lookup fails", async () => {
+    const { client } = makeClient({
+      [V2_LIKERS]: [{ status: 402, body: { state: false, exc_type: "InsufficientFunds" } }],
+    });
+    await expect(getLikerCount(client, "1")).resolves.toBeNull();
+  });
+
+  it("returns null when user_count is missing", async () => {
+    const { client } = makeClient({ [V2_LIKERS]: [{ status: 200, body: { users: [] } }] });
+    await expect(getLikerCount(client, "1")).resolves.toBeNull();
   });
 });
 

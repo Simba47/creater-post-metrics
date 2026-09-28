@@ -66,6 +66,12 @@ describe("mapV2Media", () => {
     expect(m.media_pk).toBe("3387654321098765432");
   });
 
+  it("hidden likes: the placeholder like_count Instagram still sends is dropped", () => {
+    const raw = { ...v2Item("v2-hidden-likes.json"), like_count: 3 };
+    expect(mapV2Media(raw).like_count).toBeNull();
+    expect(mapV1Media(raw).like_count).toBeNull();
+  });
+
   it("hidden likes + missing reshare_count → nulls, not zeros", () => {
     const m = mapV2Media(v2Item("v2-hidden-likes.json"));
     expect(m.likes_hidden).toBe(true);

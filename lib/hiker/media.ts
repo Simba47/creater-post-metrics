@@ -10,6 +10,7 @@ export interface MediaResult {
 
 export const V2_BY_URL = "/v2/media/info/by/url";
 export const V1_BY_URL = "/v1/media/by/url";
+export const V2_LIKERS = "/v2/media/likers";
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -128,4 +129,17 @@ export async function getMediaByUrl(
     throw new AppError("UPSTREAM_ERROR", "The metrics provider returned an unexpected response.");
   }
   throw errorForStatus(v1, V1_BY_URL);
+}
+
+/**
+ * The real like count of a post whose creator hid likes, or null if it can't be had.
+ * The media payload only carries a placeholder (2 or 3) then, but the likers endpoint's user_count
+ * is the true total (verified: it equals like_count exactly on posts with visible likes).
+ * Never throws: a missing count isn't worth failing the whole fetch over.
+ */
+export async function getLikerCount(client: HikerClient, mediaPk: string, shortcode?: string): Promise<number | null> {
+  const res = await call(client, V2_LIKERS, { id: mediaPk, safe_int: "true" }, shortcode).catch(() => null);
+  if (res?.status !== 200 || !isObject(res.body)) return null;
+  const n = res.body.user_count;
+  return typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
