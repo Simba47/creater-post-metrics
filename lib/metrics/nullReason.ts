@@ -23,7 +23,9 @@ export function nullReason(
       return flags.shares_disabled ? HIDDEN : fromV1 ? NOT_IN_V1 : NOT_PUBLIC;
     case "reposts":
     case "saves":
-      return fromV1 ? NOT_IN_V1 : NOT_PUBLIC;
+      // v2 includes save_count / media_repost_count for some posts and omits them for others
+      // (observed: present on a Sep 2026 reel, absent on a Jul 2025 reel).
+      return fromV1 ? NOT_IN_V1 : "Instagram didn't return this for this post";
     case "comments":
       return NOT_PUBLIC;
   }

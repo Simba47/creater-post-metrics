@@ -155,8 +155,8 @@ Returns `{ post, snapshots }`, with snapshots newest first (capped at 500). Retu
 | Likes | `like_count` | Public unless the creator hid like counts (`like_and_view_counts_disabled`) |
 | Comments | `comment_count` | Public |
 | Shares | `reshare_count` | v2 only. `null` when the creator disabled share counts (`share_count_disabled`). |
-| Reposts | `media_repost_count` | v2 only |
-| Saves | `save_count` | v2 only. Stored exactly as returned, never estimated or derived from other fields. |
+| Reposts | `media_repost_count` | v2 only, and only for some posts (absent on a Jul 2025 reel; reposts launched Aug 2025) |
+| Saves | `save_count` | v2 only, and Instagram omits it for some posts. Stored exactly as returned, never estimated or derived. |
 
 ### v2 vs the v1 fallback
 
