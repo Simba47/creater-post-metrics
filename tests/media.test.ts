@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHikerClient, parseJsonSafeInts, type HikerCallLog } from "@/lib/hiker/client";
-import { getMediaByUrl, V1_BY_URL, V2_BY_URL } from "@/lib/hiker/media";
+import { completeness, getMediaByUrl, V1_BY_URL, V2_BY_URL } from "@/lib/hiker/media";
 import { AppError } from "@/lib/errors";
 
 const URL_IN = "https://www.instagram.com/p/C8xYz12AbCd/";
@@ -37,7 +37,7 @@ function makeClient(routes: Record<string, Route[]>) {
   return { client, calls, logs, sleep, fetchImpl };
 }
 
-const v2Item = { pk: "3312345678901234567", code: "C8xYz12AbCd", like_count: 10 };
+const v2Item = { pk: "3312345678901234567", code: "C8xYz12AbCd", like_count: 10, save_count: 5, media_repost_count: 2 };
 /** The v2 by/url body shape HikerAPI actually returns (verified with probe). */
 const v2Body = { media_or_ad: v2Item, status: "ok" };
 const v1Item = { pk: "3312345678901234567", code: "C8xYz12AbCd", like_count: 12, product_type: "ad" };
@@ -212,6 +212,45 @@ describe("getMediaByUrl", () => {
     });
     await expect(getMediaByUrl(client, URL_IN)).resolves.toMatchObject({ source: "v2_by_url" });
     errSpy.mockRestore();
+  });
+});
+
+describe("getMediaByUrl — saves/reposts completeness retries", () => {
+  const bare = { pk: "1", code: "C8xYz12AbCd", like_count: 10 };
+  const savesOnly = { ...bare, save_count: 3 };
+  const full = { ...bare, save_count: 4, media_repost_count: 1 };
+  const body = (m: object) => ({ status: 200, body: { media_or_ad: m, status: "ok" } });
+
+  it("counts the intermittent fields", () => {
+    expect(completeness(bare)).toBe(0);
+    expect(completeness(savesOnly)).toBe(1);
+    expect(completeness({ ...full, save_count: 0 })).toBe(2); // a real 0 counts as present
+  });
+
+  it("re-fetches when saves/reposts are missing and keeps the complete response", async () => {
+    const { client, calls } = makeClient({ [V2_BY_URL]: [body(bare), body(full)] });
+    const result = await getMediaByUrl(client, URL_IN);
+    expect(result.raw).toEqual(full);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("stops after the retry budget and keeps the most complete response seen", async () => {
+    const { client, calls } = makeClient({ [V2_BY_URL]: [body(bare), body(savesOnly), body(bare)] });
+    const result = await getMediaByUrl(client, URL_IN);
+    expect(result.raw).toEqual(savesOnly);
+    expect(calls).toHaveLength(3); // 1 + 2 retries
+  });
+
+  it("keeps the first response when a retry fails", async () => {
+    const { client } = makeClient({ [V2_BY_URL]: [body(bare), { status: 400 }, { status: 404 }] });
+    const result = await getMediaByUrl(client, URL_IN);
+    expect(result).toEqual({ raw: bare, source: "v2_by_url" });
+  });
+
+  it("can be turned off", async () => {
+    const { client, calls } = makeClient({ [V2_BY_URL]: [body(bare)] });
+    await getMediaByUrl(client, URL_IN, undefined, { completenessRetries: 0 });
+    expect(calls).toHaveLength(1);
   });
 });
 

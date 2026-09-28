@@ -193,8 +193,17 @@ Rows that repeat a post are fetched once and filled in every row. Up to 500 post
 | Likes | `like_count` | Public unless the creator hid like counts (`like_and_view_counts_disabled`) |
 | Comments | `comment_count` | Public |
 | Shares | `reshare_count` | v2 only. `null` when the creator disabled share counts (`share_count_disabled`). |
-| Reposts | `media_repost_count` | v2 only. Instagram sometimes omits it; a later fetch of the same post often includes it. |
-| Saves | `save_count` | v2 only, and omitted intermittently like reposts. Stored exactly as returned, never estimated or derived. |
+| Reposts | `media_repost_count` | v2 only. Omitted at random on many responses; see below. |
+| Saves | `save_count` | v2 only, omitted at random like reposts. Stored exactly as returned, never estimated or derived. |
+
+### Missing saves / reposts: automatic retries
+
+v2 leaves out `save_count` and/or `media_repost_count` on roughly 40% of responses, at random: the same post returns them on the next call. Nothing in the payload predicts it (account type, verification, post age and size were all compared). The app handles this in two ways:
+
+- **Retries:** when either field is missing, v2 is called again up to 2 more times (`COMPLETENESS_RETRIES` in `lib/hiker/media.ts`), and the most complete response is kept. That's 0–2 extra requests per affected post. In a 20-post test, one pass left 3 of 8 incomplete posts still missing a field, and a re-run fixed 2 more.
+- **No caching of incomplete results:** an incomplete v2 snapshot is never served from cache, so simply re-running a sheet fills the remaining gaps. Only the incomplete posts cost requests.
+
+Some posts may never return a field. One post returned `save_count` but no `media_repost_count` on 7 calls in a row, possibly because Instagram omits a repost count of 0 (unconfirmed). Such posts show "—" and cost up to 3 requests on each run.
 
 ### v2 vs the v1 fallback
 

@@ -78,21 +78,44 @@ async function call(client: HikerClient, path: string, params: Record<string, st
   }
 }
 
+/** Extra v2 fetches when save_count / media_repost_count are missing. */
+export const COMPLETENESS_RETRIES = 2;
+
+/** How many of the intermittently-omitted fields (saves, reposts) a v2 media object has. */
+export function completeness(media: Record<string, unknown>): number {
+  return Number("save_count" in media) + Number("media_repost_count" in media);
+}
+
 /**
  * Fetches a media object for a canonical Instagram URL.
  * v2 is primary; v1 is only tried when v2 says 404 (ads and some other posts are v1-only).
  * A v2 400 means the URL itself is bad, so v1 is not tried.
+ *
+ * v2 omits save_count / media_repost_count on a large share of responses at random (observed
+ * ~40%; the same post returns them on a later call). When either is missing, v2 is called again up
+ * to `completenessRetries` times and the most complete response is kept.
  */
 export async function getMediaByUrl(
   client: HikerClient,
   url: string,
   shortcode?: string,
+  opts: { completenessRetries?: number } = {},
 ): Promise<MediaResult> {
-  const v2 = await call(client, V2_BY_URL, { url, safe_int: "true" }, shortcode);
+  const params = { url, safe_int: "true" };
+  const v2 = await call(client, V2_BY_URL, params, shortcode);
 
   if (v2.status === 200) {
-    const item = extractV2Media(v2.body);
-    if (item) return { raw: item, source: "v2_by_url" };
+    let item = extractV2Media(v2.body);
+    if (item) {
+      const retries = opts.completenessRetries ?? COMPLETENESS_RETRIES;
+      for (let i = 0; i < retries && completeness(item) < 2; i++) {
+        // A failed retry isn't fatal: we already have a usable response.
+        const again = await call(client, V2_BY_URL, params, shortcode).catch(() => null);
+        const next = again?.status === 200 ? extractV2Media(again.body) : null;
+        if (next && completeness(next) >= completeness(item)) item = next;
+      }
+      return { raw: item, source: "v2_by_url" };
+    }
     // A 200 without a media object is treated like a 404 and falls through to v1.
     console.warn("[hiker] v2 returned 200 without a media object; falling back to v1");
   } else if (v2.status !== 404) {

@@ -16,7 +16,10 @@ export async function scrapePost(shortcode: string, canonicalUrl: string, force:
     const latest = existing ? await getLatestSnapshot(existing.id) : null;
     if (existing && latest) {
       const ageMs = Date.now() - new Date(latest.fetched_at).getTime();
-      if (ageMs < getEnv().CACHE_TTL_MINUTES * 60_000) {
+      // v2 omits saves/reposts at random, so an incomplete v2 snapshot is worth fetching again.
+      const incomplete =
+        latest.source_endpoint === "v2_by_url" && (latest.save_count === null || latest.repost_count === null);
+      if (ageMs < getEnv().CACHE_TTL_MINUTES * 60_000 && !incomplete) {
         return { post: existing, snapshot: latest, cached: true };
       }
     }
