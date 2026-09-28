@@ -5,7 +5,7 @@ import { getSupabase } from "./supabase";
 import type { PostRow, PostWithLatest, Snapshot, SnapshotRow } from "./types";
 
 const SNAPSHOT_COLUMNS =
-  "id, post_id, fetched_at, source_endpoint, like_count, comment_count, play_count, ig_play_count, fb_play_count, reshare_count, save_count, likes_hidden, shares_disabled" as const;
+  "id, post_id, fetched_at, source_endpoint, like_count, comment_count, play_count, ig_play_count, fb_play_count, reshare_count, repost_count, save_count, likes_hidden, shares_disabled" as const;
 
 const MAX_SNAPSHOTS = 500;
 
@@ -59,6 +59,7 @@ export async function insertSnapshot(
     ig_play_count: m.ig_play_count,
     fb_play_count: m.fb_play_count,
     reshare_count: m.reshare_count,
+    repost_count: m.repost_count,
     save_count: m.save_count,
     likes_hidden: m.likes_hidden,
     shares_disabled: m.shares_disabled,

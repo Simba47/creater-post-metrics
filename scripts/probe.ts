@@ -4,14 +4,14 @@
  *   npx tsx scripts/probe.ts <instagram-url> [--v1]
  *
  * Calls v2 by/url (falling back to v1 on 404, or v1 only with --v1) and writes the response body to
- * tests/fixtures/real-<shortcode>.json. v2 bodies keep their { items, status } wrapper; v1 bodies are
- * the bare media object. Big integers are kept as strings, exactly as the app sees them.
+ * tests/fixtures/real-<shortcode>.json. v2 bodies keep their { media_or_ad, status } wrapper; v1
+ * bodies are the bare media object. Big integers are kept as strings, exactly as the app sees them.
  * Does not touch the database. Reads HIKER_API_KEY from the environment or .env.local.
  */
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { createHikerClient, type HikerResponse } from "../lib/hiker/client";
-import { V1_BY_URL, V2_BY_URL } from "../lib/hiker/media";
+import { extractV2Media, V1_BY_URL, V2_BY_URL } from "../lib/hiker/media";
 import { parseInstagramUrl } from "../lib/instagram/parseUrl";
 import { mapV1Media, mapV2Media } from "../lib/metrics/mapper";
 
@@ -69,7 +69,7 @@ async function main() {
   console.log(`\nWrote ${source} response to ${path.relative(process.cwd(), outPath)}`);
 
   const body = res.body as Record<string, unknown>;
-  const raw = source === "v2" ? ((body.items as Record<string, unknown>[] | undefined)?.[0] ?? {}) : body;
+  const raw = source === "v2" ? (extractV2Media(body) ?? {}) : body;
   const mapped = source === "v2" ? mapV2Media(raw) : mapV1Media(raw);
   console.log("\nMapped metrics (check these against the post in the Instagram app):");
   console.table(mapped);

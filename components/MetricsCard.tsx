@@ -113,7 +113,7 @@ export function MetricsCard({
         </p>
       )}
 
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Tile
           label="Views"
           value={snapshot.play_count}
@@ -124,6 +124,7 @@ export function MetricsCard({
         <Tile label="Likes" value={snapshot.like_count} metric="likes" snapshot={snapshot} />
         <Tile label="Comments" value={snapshot.comment_count} metric="comments" snapshot={snapshot} />
         <Tile label="Shares" value={snapshot.reshare_count} metric="shares" snapshot={snapshot} />
+        <Tile label="Reposts" value={snapshot.repost_count} metric="reposts" snapshot={snapshot} />
         <Tile label="Saves" value={snapshot.save_count} metric="saves" snapshot={snapshot} />
       </div>
 

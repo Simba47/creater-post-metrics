@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { extractV2Media } from "@/lib/hiker/media";
 import { mapV1Media, mapV2Media } from "@/lib/metrics/mapper";
 
 const FIXTURES = path.join(__dirname, "fixtures");
@@ -12,8 +13,9 @@ function load(name: string): unknown {
 }
 
 function v2Item(name: string): Raw {
-  const body = load(name) as { items: Raw[] };
-  return body.items[0]!;
+  const media = extractV2Media(load(name));
+  if (!media) throw new Error(`${name} has no v2 media object`);
+  return media;
 }
 
 describe("mapV2Media", () => {
@@ -33,7 +35,8 @@ describe("mapV2Media", () => {
       ig_play_count: 4102211,
       fb_play_count: 719134,
       reshare_count: 9120,
-      save_count: null,
+      repost_count: 412,
+      save_count: 15210,
       likes_hidden: false,
       shares_disabled: false,
     });
@@ -48,8 +51,9 @@ describe("mapV2Media", () => {
     expect(m.ig_play_count).toBeNull();
     expect(m.fb_play_count).toBeNull();
     expect(m.reshare_count).toBe(3);
+    expect(m.repost_count).toBe(0); // a real zero stays 0
+    expect(m.save_count).toBe(57);
     expect(m.shares_disabled).toBe(false);
-    expect(m.save_count).toBeNull();
   });
 
   it("maps a carousel with a null caption", () => {
@@ -68,6 +72,7 @@ describe("mapV2Media", () => {
     expect(m.shares_disabled).toBe(true);
     expect(m.like_count).toBeNull();
     expect(m.reshare_count).toBeNull();
+    expect(m.repost_count).toBeNull();
     expect(m.ig_play_count).toBeNull();
     expect(m.fb_play_count).toBeNull();
     expect(m.save_count).toBeNull();
@@ -100,6 +105,7 @@ describe("mapV2Media", () => {
       "ig_play_count",
       "fb_play_count",
       "reshare_count",
+      "repost_count",
       "save_count",
     ] as const) {
       expect(m[key], key).toBeNull();
@@ -120,8 +126,9 @@ describe("mapV2Media", () => {
     expect(mapV2Media({ pk: 12345 }).media_pk).toBe("12345");
   });
 
-  it("ignores save-like fields — saves are never derived", () => {
-    expect(mapV2Media({ save_count: 10, saved_count: 10 } as Raw).save_count).toBeNull();
+  it("reads saves only from save_count — nothing is derived from other fields", () => {
+    expect(mapV2Media({ save_count: 10 }).save_count).toBe(10);
+    expect(mapV2Media({ saved_count: 10, like_count: 100 }).save_count).toBeNull();
   });
 });
 
@@ -142,10 +149,22 @@ describe("mapV1Media", () => {
       ig_play_count: null,
       fb_play_count: null,
       reshare_count: null,
+      repost_count: null,
       save_count: null,
       likes_hidden: false,
       shares_disabled: false,
     });
+  });
+
+  it("treats v1's view_count: 0 as unknown, not a real zero", () => {
+    expect(mapV1Media({ view_count: 0 }).play_count).toBeNull();
+    expect(mapV1Media({ play_count: 5000, view_count: 0 }).play_count).toBe(5000);
+  });
+
+  it("prefers taken_at_ts over the ISO taken_at", () => {
+    expect(mapV1Media({ taken_at: "2026-09-28T04:11:56Z", taken_at_ts: 1790568716 }).taken_at).toBe(
+      "2026-09-28T04:11:56.000Z",
+    );
   });
 
   it("also accepts the v2 shape", () => {
@@ -161,13 +180,13 @@ const realFixtures = readdirSync(FIXTURES).filter((f) => f.startsWith("real-") &
 describe.skipIf(realFixtures.length === 0)("real HikerAPI fixtures", () => {
   it.each(realFixtures)("%s maps without zero-filling", (file) => {
     const body = load(file) as Raw;
-    const isV2 = Array.isArray(body.items);
-    const raw = isV2 ? (body.items as Raw[])[0]! : body;
+    const v2Media = extractV2Media(body);
+    const isV2 = v2Media !== null;
+    const raw = v2Media ?? body;
     const m = isV2 ? mapV2Media(raw) : mapV1Media(raw);
     expect(m.shortcode).toBeTruthy();
     expect(m.media_pk).toMatch(/^\d+$/);
-    expect(m.save_count).toBeNull();
-    for (const key of ["like_count", "comment_count", "reshare_count", "play_count"] as const) {
+    for (const key of ["like_count", "comment_count", "reshare_count", "play_count", "save_count"] as const) {
       if (raw[key] === undefined && !(key === "play_count" && raw.view_count !== undefined)) {
         expect(m[key], key).toBeNull();
       }

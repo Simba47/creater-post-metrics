@@ -1,25 +1,34 @@
 {
-  "items": [
-    {
-      "pk": "3412345678901234567",
-      "id": "3412345678901234567_25025320",
-      "code": "C9ReelAbc12",
-      "taken_at": 1719830400,
-      "media_type": 2,
-      "product_type": "clips",
-      "user": { "pk": "25025320", "username": "natgeo", "full_name": "National Geographic", "is_private": false, "is_verified": true },
-      "caption": { "pk": "18012345678901234", "text": "Sunrise over the Serengeti 🌅" },
-      "like_count": 184233,
-      "comment_count": 1532,
-      "play_count": 4821345,
-      "ig_play_count": 4102211,
-      "fb_play_count": 719134,
-      "view_count": 2100000,
-      "reshare_count": 9120,
-      "like_and_view_counts_disabled": false,
-      "share_count_disabled": false,
-      "video_duration": 27.4
-    }
-  ],
+  "media_or_ad": {
+    "pk": "3412345678901234567",
+    "id": "3412345678901234567_25025320",
+    "code": "C9ReelAbc12",
+    "taken_at": 1719830400,
+    "media_type": 2,
+    "product_type": "clips",
+    "user": {
+      "pk": "25025320",
+      "username": "natgeo",
+      "full_name": "National Geographic",
+      "is_private": false,
+      "is_verified": true
+    },
+    "caption": {
+      "pk": "18012345678901234",
+      "text": "Sunrise over the Serengeti 🌅"
+    },
+    "like_count": 184233,
+    "comment_count": 1532,
+    "play_count": 4821345,
+    "ig_play_count": 4102211,
+    "fb_play_count": 719134,
+    "view_count": 2100000,
+    "reshare_count": 9120,
+    "like_and_view_counts_disabled": false,
+    "share_count_disabled": false,
+    "video_duration": 27.4,
+    "media_repost_count": 412,
+    "save_count": 15210
+  },
   "status": "ok"
 }

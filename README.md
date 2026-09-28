@@ -30,9 +30,9 @@ All four are **server-only**. Never prefix them with `NEXT_PUBLIC_`. The modules
 
 ### Database
 
-The schema lives in [supabase/migrations/001_init.sql](supabase/migrations/001_init.sql). Apply it with either:
+The schema lives in `supabase/migrations/`. Run the files **in order**: [001_init.sql](supabase/migrations/001_init.sql), then [002_repost_count.sql](supabase/migrations/002_repost_count.sql). Apply them with either:
 
-- **Supabase dashboard:** SQL Editor → New query → paste the file → Run.
+- **Supabase dashboard:** SQL Editor → New query → paste one file → Run. Repeat for the next file.
 - **Supabase CLI:** `supabase link --project-ref <ref>` then `supabase db push`.
 
 It creates:
@@ -117,7 +117,7 @@ Response `200`:
     "id": "uuid", "post_id": "uuid", "fetched_at": "…", "source_endpoint": "v2_by_url",
     "like_count": 184233, "comment_count": 1532, "play_count": 4821345,
     "ig_play_count": 4102211, "fb_play_count": 719134, "reshare_count": 9120,
-    "save_count": null, "likes_hidden": false, "shares_disabled": false
+    "repost_count": 412, "save_count": 15210, "likes_hidden": false, "shares_disabled": false
   },
   "cached": false
 }
@@ -154,12 +154,18 @@ Returns `{ post, snapshots }`, with snapshots newest first (capped at 500). Retu
 | IG / FB views | `ig_play_count` / `fb_play_count` | Reels only, and not always present |
 | Likes | `like_count` | Public unless the creator hid like counts (`like_and_view_counts_disabled`) |
 | Comments | `comment_count` | Public |
-| Shares | `reshare_count` | Often present, but `null` when the creator disabled share counts (`share_count_disabled`) or the field is missing. Usually missing on v1 responses. |
-| **Saves** | none | **Always `null`.** |
+| Shares | `reshare_count` | v2 only. `null` when the creator disabled share counts (`share_count_disabled`). |
+| Reposts | `media_repost_count` | v2 only |
+| Saves | `save_count` | v2 only. Stored exactly as returned, never estimated or derived from other fields. |
 
-### Why saves are always null
+### v2 vs the v1 fallback
 
-Instagram only shows save counts to the post's owner, in Insights, through the authenticated Graph API with the owner's permission. No public or scraping endpoint returns them, HikerAPI included. The `save_count` column exists so the schema won't need a migration if a legitimate source appears later (for example, a creator connecting their own account). The code deliberately never estimates or derives it.
+The two endpoints return very different payloads, both verified against real responses:
+
+- **v2** (`/v2/media/info/by/url`) returns `{ media_or_ad: { ...media }, status: "ok" }`, not the `{ items: [...] }` shape in HikerAPI's docs; the code accepts both. It carries every metric above.
+- **v1** (`/v1/media/by/url`) returns the bare media object with only likes, comments and plays. It has no shares, reposts, saves or IG/FB split. It also uses `caption_text` and an ISO `taken_at`, and sends `view_count: 0` next to a real `play_count`, so the mapper treats that 0 as unknown.
+
+The app only uses v1 when v2 returns 404 (or a 200 without a media object). A snapshot's `source_endpoint` records which one it came from, and the UI tooltips say when a `—` is because of the v1 fallback.
 
 ### Engagement rate
 
@@ -174,15 +180,14 @@ Shown only when views are known and non-zero: `(likes + comments + shares) / vie
 - **Snapshots only exist when someone fetches.** There are no scheduled refreshes yet, so history is only as dense as manual fetches.
 - **Share links (`instagram.com/share/...`) are rejected.** Resolving them would need a server-side redirect follow, which Instagram often blocks. Users are asked to paste the final URL.
 - **Private posts can't be fetched.** How HikerAPI signals private versus deleted posts isn't confirmed yet (see TODOs). Both currently surface as 404s.
-- **v1 field names are partly assumed.** The v1 mapper accepts both v2-style and flatter field names. Confirm with `scripts/probe.ts`.
+- **v1 fallback snapshots are sparse.** They have no shares, reposts, saves or IG/FB split (see above).
 - **Posts are keyed by the shortcode from the user's URL.** If Instagram ever returns a different `code` for the same media (e.g. a private-share code), they'd be stored as two posts.
 - **Post metadata upserts skip nulls.** A later response missing a field (e.g. a v1 fallback with no caption) won't wipe a stored value. This also means a caption the creator deleted stays stored.
 - **No auth.** Anyone who can reach the deployment can trigger HikerAPI calls, limited only by the per-IP rate limit.
 
 ### Open `TODO(verify with probe)` items
 
-- [lib/metrics/mapper.ts](lib/metrics/mapper.ts): v1 caption field (`caption_text` vs `caption.text`), v1 `taken_at` format, whether v1 includes `reshare_count`.
-- [lib/hiker/media.ts](lib/hiker/media.ts): what HikerAPI returns for private or age-restricted posts (currently 403 is assumed → `PRIVATE_OR_UNAVAILABLE`), and whether v2 ever returns 200 with empty `items` (currently treated like a 404, so it falls back to v1).
+- [lib/hiker/media.ts](lib/hiker/media.ts): what HikerAPI returns for private or age-restricted posts (currently 403 is assumed → `PRIVATE_OR_UNAVAILABLE`).
 
 ---
 
@@ -192,7 +197,6 @@ Shown only when views are known and non-zero: `(likes + comments + shares) / vie
 - **Scheduled refreshes:** a cron job (Vercel Cron or Supabase `pg_cron`) that re-snapshots tracked posts, with a per-post cadence and HikerAPI budget controls.
 - **Shared rate limiting:** Upstash Redis instead of in-memory.
 - **Payments / quotas:** meter HikerAPI usage per user, using `hiker_api_calls`.
-- **Saves:** only possible through an owner-authorized Instagram Graph API connection.
 
 ---
 
@@ -217,6 +221,6 @@ lib/
   db/                           Supabase client, typed schema, queries
   rateLimit.ts                  in-memory per-IP limiter
 scripts/probe.ts                capture real payloads
-supabase/migrations/001_init.sql
+supabase/migrations/            001_init.sql, 002_repost_count.sql
 tests/                          Vitest specs + fixtures
 ```

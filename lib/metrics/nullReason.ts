@@ -1,25 +1,29 @@
-export type MetricKey = "views" | "ig_views" | "fb_views" | "likes" | "comments" | "shares" | "saves";
+export type MetricKey = "views" | "ig_views" | "fb_views" | "likes" | "comments" | "shares" | "reposts" | "saves";
 
 const NOT_PUBLIC = "Not available publicly";
 const HIDDEN = "Hidden by creator";
+const NOT_IN_V1 = "Not returned by the fallback endpoint (v1). Force-refresh later to try the full endpoint.";
 
 /** Tooltip text explaining why a metric is null. */
 export function nullReason(
   metric: MetricKey,
-  flags: { likes_hidden: boolean | null; shares_disabled: boolean | null },
+  flags: { likes_hidden: boolean | null; shares_disabled: boolean | null; source_endpoint?: string | null },
 ): string {
+  const fromV1 = flags.source_endpoint === "v1_by_url";
   switch (metric) {
-    case "saves":
-      return `${NOT_PUBLIC} — Instagram only shows saves to the post's owner`;
     case "likes":
       return flags.likes_hidden ? HIDDEN : NOT_PUBLIC;
     case "views":
-    case "ig_views":
-    case "fb_views":
       // like_and_view_counts_disabled hides views as well as likes.
       return flags.likes_hidden ? HIDDEN : `${NOT_PUBLIC} (photos and carousels don't report views)`;
+    case "ig_views":
+    case "fb_views":
+      return flags.likes_hidden ? HIDDEN : fromV1 ? NOT_IN_V1 : NOT_PUBLIC;
     case "shares":
-      return flags.shares_disabled ? HIDDEN : NOT_PUBLIC;
+      return flags.shares_disabled ? HIDDEN : fromV1 ? NOT_IN_V1 : NOT_PUBLIC;
+    case "reposts":
+    case "saves":
+      return fromV1 ? NOT_IN_V1 : NOT_PUBLIC;
     case "comments":
       return NOT_PUBLIC;
   }

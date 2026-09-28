@@ -1,18 +1,21 @@
 {
-  "items": [
-    {
-      "pk": "3401234567890123456",
-      "code": "C9HiddenLk1",
-      "taken_at": 1718000000,
-      "media_type": 2,
-      "product_type": "clips",
-      "user": { "pk": "5550001", "username": "quiet.creator" },
-      "caption": { "text": "no likes shown here" },
-      "comment_count": 44,
-      "play_count": 91000,
-      "like_and_view_counts_disabled": true,
-      "share_count_disabled": true
-    }
-  ],
+  "media_or_ad": {
+    "pk": "3401234567890123456",
+    "code": "C9HiddenLk1",
+    "taken_at": 1718000000,
+    "media_type": 2,
+    "product_type": "clips",
+    "user": {
+      "pk": "5550001",
+      "username": "quiet.creator"
+    },
+    "caption": {
+      "text": "no likes shown here"
+    },
+    "comment_count": 44,
+    "play_count": 91000,
+    "like_and_view_counts_disabled": true,
+    "share_count_disabled": true
+  },
   "status": "ok"
 }

@@ -15,10 +15,19 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function firstV2Item(body: unknown): Record<string, unknown> | null {
-  if (!isObject(body) || !Array.isArray(body.items)) return null;
-  const item: unknown = body.items[0];
-  return isObject(item) ? item : null;
+/**
+ * Extracts the media object from a v2 by/url body.
+ * Observed shape (verified with probe): { media_or_ad: { ...media }, status: "ok" }.
+ * The documented { items: [media] } shape is still accepted in case other v2 variants use it.
+ */
+export function extractV2Media(body: unknown): Record<string, unknown> | null {
+  if (!isObject(body)) return null;
+  if (isObject(body.media_or_ad)) return body.media_or_ad;
+  if (Array.isArray(body.items)) {
+    const item: unknown = body.items[0];
+    return isObject(item) ? item : null;
+  }
+  return null;
 }
 
 /** Maps a non-success status (after the client's retry) to a typed error. */
@@ -82,10 +91,10 @@ export async function getMediaByUrl(
   const v2 = await call(client, V2_BY_URL, { url, safe_int: "true" }, shortcode);
 
   if (v2.status === 200) {
-    const item = firstV2Item(v2.body);
+    const item = extractV2Media(v2.body);
     if (item) return { raw: item, source: "v2_by_url" };
-    // 200 with an empty items[] is treated like a 404 and falls through to v1.
-    // TODO(verify with probe): confirm whether HikerAPI ever returns 200 with empty items.
+    // A 200 without a media object is treated like a 404 and falls through to v1.
+    console.warn("[hiker] v2 returned 200 without a media object; falling back to v1");
   } else if (v2.status !== 404) {
     throw errorForStatus(v2, V2_BY_URL);
   }

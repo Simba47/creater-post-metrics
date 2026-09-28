@@ -24,6 +24,7 @@ export type SnapshotMetrics = {
   ig_play_count: number | null;
   fb_play_count: number | null;
   reshare_count: number | null;
+  repost_count: number | null;
   save_count: number | null;
   likes_hidden: boolean | null;
   shares_disabled: boolean | null;

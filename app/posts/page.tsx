@@ -103,7 +103,7 @@ export default function PostsPage() {
 
       {!error && data && data.items.length > 0 && (
         <div className={`overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 ${loading ? "opacity-60" : ""}`}>
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[860px] text-sm">
             <thead className="border-b border-zinc-200 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
               <tr>
                 <th scope="col" className="px-3 py-2 text-left font-medium">Post</th>
@@ -112,6 +112,8 @@ export default function PostsPage() {
                 <SortHeader label="Likes" column="likes" {...headerProps} />
                 <th scope="col" className="px-3 py-2 text-right font-medium">Comments</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium">Shares</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Reposts</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Saves</th>
                 <SortHeader label="Last fetched" column="recent" {...headerProps} />
               </tr>
             </thead>
@@ -141,6 +143,12 @@ export default function PostsPage() {
                   </td>
                   <td className="px-3 py-2 text-right">
                     <NumberCell value={p.reshare_count} reason={nullReason("shares", p)} />
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <NumberCell value={p.repost_count} reason={nullReason("reposts", p)} />
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <NumberCell value={p.save_count} reason={nullReason("saves", p)} />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-right text-zinc-600 dark:text-zinc-400">
                     {p.last_fetched_at ? timeAgo(p.last_fetched_at) : "—"}

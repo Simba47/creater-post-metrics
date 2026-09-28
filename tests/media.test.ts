@@ -38,12 +38,21 @@ function makeClient(routes: Record<string, Route[]>) {
 }
 
 const v2Item = { pk: "3312345678901234567", code: "C8xYz12AbCd", like_count: 10 };
+/** The v2 by/url body shape HikerAPI actually returns (verified with probe). */
+const v2Body = { media_or_ad: v2Item, status: "ok" };
 const v1Item = { pk: "3312345678901234567", code: "C8xYz12AbCd", like_count: 12, product_type: "ad" };
 
 describe("getMediaByUrl", () => {
-  it("returns items[0] from v2 on 200", async () => {
-    const { client, calls } = makeClient({
+  it("also accepts the documented { items: [media] } v2 shape", async () => {
+    const { client } = makeClient({
       [V2_BY_URL]: [{ status: 200, body: { items: [v2Item], status: "ok" } }],
+    });
+    await expect(getMediaByUrl(client, URL_IN)).resolves.toEqual({ raw: v2Item, source: "v2_by_url" });
+  });
+
+  it("returns media_or_ad from v2 on 200", async () => {
+    const { client, calls } = makeClient({
+      [V2_BY_URL]: [{ status: 200, body: v2Body }],
     });
     const result = await getMediaByUrl(client, URL_IN);
     expect(result).toEqual({ raw: v2Item, source: "v2_by_url" });
@@ -54,7 +63,7 @@ describe("getMediaByUrl", () => {
 
   it("sends the access key header", async () => {
     const { client, fetchImpl } = makeClient({
-      [V2_BY_URL]: [{ status: 200, body: { items: [v2Item], status: "ok" } }],
+      [V2_BY_URL]: [{ status: 200, body: v2Body }],
     });
     await getMediaByUrl(client, URL_IN);
     const init = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![1] as RequestInit;
@@ -72,7 +81,8 @@ describe("getMediaByUrl", () => {
     expect(calls[1]!.searchParams.has("safe_int")).toBe(false);
   });
 
-  it("falls back to v1 when v2 returns 200 with empty items", async () => {
+  it("falls back to v1 when v2 returns 200 without a media object", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const { client } = makeClient({
       [V2_BY_URL]: [{ status: 200, body: { items: [], status: "ok" } }],
       [V1_BY_URL]: [{ status: 200, body: v1Item }],
@@ -103,7 +113,7 @@ describe("getMediaByUrl", () => {
     const { client, calls, sleep } = makeClient({
       [V2_BY_URL]: [
         { status: 429, headers: { "retry-after": "2" } },
-        { status: 200, body: { items: [v2Item], status: "ok" } },
+        { status: 200, body: v2Body },
       ],
     });
     const result = await getMediaByUrl(client, URL_IN);
@@ -190,7 +200,7 @@ describe("getMediaByUrl", () => {
 
   it("does not fail the request when logging throws", async () => {
     const { fetchImpl } = mockFetch({
-      [V2_BY_URL]: [{ status: 200, body: { items: [v2Item], status: "ok" } }],
+      [V2_BY_URL]: [{ status: 200, body: v2Body }],
     });
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const client = createHikerClient({

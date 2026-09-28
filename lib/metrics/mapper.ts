@@ -20,8 +20,10 @@ export interface NormalizedMetrics {
   ig_play_count: number | null;
   fb_play_count: number | null;
   reshare_count: number | null;
-  /** Not publicly available from any endpoint. Always null; do not derive it. */
-  save_count: null;
+  /** From media_repost_count (v2). */
+  repost_count: number | null;
+  /** Only when the payload includes save_count (v2 does, v1 doesn't). Never derived or estimated. */
+  save_count: number | null;
   likes_hidden: boolean;
   shares_disabled: boolean;
 }
@@ -92,7 +94,8 @@ export function mapV2Media(raw: Raw): NormalizedMetrics {
     ig_play_count: count(raw.ig_play_count),
     fb_play_count: count(raw.fb_play_count),
     reshare_count: count(raw.reshare_count),
-    save_count: null,
+    repost_count: count(raw.media_repost_count),
+    save_count: count(raw.save_count),
     likes_hidden: raw.like_and_view_counts_disabled === true,
     shares_disabled: raw.share_count_disabled === true,
   };
@@ -112,18 +115,19 @@ export function mapV1Media(raw: Raw): NormalizedMetrics {
     owner_pk: id(user?.pk),
     media_type: int(raw.media_type),
     product_type: str(raw.product_type),
-    // TODO(verify with probe): v1 may expose the caption as `caption_text` rather than `caption.text`.
+    // Verified: v1 uses caption_text and an ISO taken_at (plus taken_at_ts); v2 names are fallbacks.
     caption: str(coalesce(raw.caption_text, caption?.text)),
-    // TODO(verify with probe): v1 taken_at may be an ISO string rather than unix seconds; both are handled.
-    taken_at: timestamp(raw.taken_at),
+    taken_at: timestamp(coalesce(raw.taken_at_ts, raw.taken_at)),
     like_count: count(raw.like_count),
     comment_count: count(raw.comment_count),
-    play_count: count(coalesce(raw.play_count, raw.view_count)),
+    // Verified: v1 sends view_count: 0 next to a real play_count, so a 0 view_count means "unknown".
+    play_count: count(coalesce(raw.play_count, raw.view_count === 0 ? null : raw.view_count)),
     ig_play_count: count(raw.ig_play_count),
     fb_play_count: count(raw.fb_play_count),
-    // TODO(verify with probe): confirm whether v1 ever includes reshare_count.
+    // Verified: v1 omits reshare_count, media_repost_count and save_count; these stay null.
     reshare_count: count(raw.reshare_count),
-    save_count: null,
+    repost_count: count(raw.media_repost_count),
+    save_count: count(raw.save_count),
     likes_hidden: raw.like_and_view_counts_disabled === true,
     shares_disabled: raw.share_count_disabled === true,
   };
