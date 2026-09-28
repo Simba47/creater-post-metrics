@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "pk": "3387654321098765432",
+      "code": "C7CarouSel1",
+      "taken_at": 1715000000,
+      "media_type": 8,
+      "product_type": "carousel_container",
+      "user": { "pk": "7654321", "username": "travel.diaries" },
+      "caption": null,
+      "like_count": 12045,
+      "comment_count": 210,
+      "reshare_count": 88,
+      "carousel_media_count": 2,
+      "carousel_media": [
+        { "pk": "3387654321098765430", "media_type": 1 },
+        { "pk": "3387654321098765431", "media_type": 2 }
+      ]
+    }
+  ],
+  "status": "ok"
+}

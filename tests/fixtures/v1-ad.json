@@ -1,0 +1,13 @@
+{
+  "pk": "3376543210987654321",
+  "id": "3376543210987654321_998877",
+  "code": "C6AdPost123",
+  "taken_at": "2024-05-01T12:00:00+00:00",
+  "media_type": 2,
+  "product_type": "ad",
+  "user": { "pk": "998877", "username": "brand.official" },
+  "caption_text": "Shop the new collection",
+  "like_count": 5210,
+  "comment_count": 97,
+  "view_count": 250000
+}

@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "pk": "3398765432109876543",
+      "id": "3398765432109876543_1234567",
+      "code": "C8PhotoXyz9",
+      "taken_at": 1717200000,
+      "media_type": 1,
+      "product_type": "feed",
+      "user": { "pk": "1234567", "username": "some.photographer", "is_private": false },
+      "caption": { "text": "Golden hour." },
+      "like_count": 842,
+      "comment_count": 0,
+      "reshare_count": 3,
+      "like_and_view_counts_disabled": false
+    }
+  ],
+  "status": "ok"
+}
