@@ -9,8 +9,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen">
+    // suppressHydrationWarning: browser extensions inject attributes on <html>/<body> before
+    // hydration. It only applies to these two elements' own attributes, not their children.
+    <html lang="en" suppressHydrationWarning>
+      <body className="min-h-screen" suppressHydrationWarning>
         <header className="border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-900/80">
           <nav className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3">
             <Link href="/" className="font-semibold tracking-tight">
