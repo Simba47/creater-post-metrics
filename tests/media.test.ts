@@ -137,6 +137,22 @@ describe("getMediaByUrl", () => {
     expect(calls).toHaveLength(1);
   });
 
+  it("reports an out-of-credits account (402) without retrying", async () => {
+    const { client, calls } = makeClient({
+      [V2_BY_URL]: [
+        {
+          status: 402,
+          body: { state: false, error: "Top up your account at https://hikerapi.com/billing", exc_type: "InsufficientFunds" },
+        },
+      ],
+    });
+    await expect(getMediaByUrl(client, URL_IN)).rejects.toMatchObject({
+      code: "UPSTREAM_ERROR",
+      message: expect.stringMatching(/out of credits/),
+    });
+    expect(calls).toHaveLength(1);
+  });
+
   it("logs every HTTP attempt", async () => {
     const { client, logs } = makeClient({
       [V2_BY_URL]: [{ status: 500 }, { status: 404 }],

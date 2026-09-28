@@ -85,7 +85,7 @@ All errors use one shape:
 | `POST_NOT_FOUND` | 404 | Both v2 and v1 returned 404: the post is deleted, private, or restricted. Also returned by `GET /api/posts/[shortcode]` for an untracked post. |
 | `PRIVATE_OR_UNAVAILABLE` | 404 | HikerAPI returned 403 |
 | `RATE_LIMITED` | 429 | Our per-IP limit (20/min on `/api/scrape`, with a `Retry-After` header), or HikerAPI still returning 429 after one retry |
-| `UPSTREAM_ERROR` | 502 / 500 | HikerAPI 5xx/401/402/timeout (502), or an unexpected server/database error (500) |
+| `UPSTREAM_ERROR` | 502 / 500 | HikerAPI 5xx/401/timeout, or 402 when the HikerAPI balance is empty (502), or an unexpected server/database error (500) |
 
 ### `POST /api/scrape`
 
