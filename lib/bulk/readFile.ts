@@ -12,6 +12,14 @@ export interface SheetSource {
   grid: Grid;
   /** Set for .xlsx uploads so the download can be the user's own workbook, filled in place. */
   xlsx: { buffer: ArrayBuffer; sheetName: string } | null;
+  /** Every tab of an .xlsx upload, so the user can switch away from the auto-picked one. */
+  tabs?: SheetTab[];
+}
+
+export interface SheetTab {
+  name: string;
+  grid: Grid;
+  posts: number;
 }
 
 function toCell(v: CellValue): Cell {
@@ -60,15 +68,14 @@ export async function readSheetSource(file: File): Promise<SheetSource> {
     throw new FileReadError("Couldn't read that Excel file. Is it a valid .xlsx?");
   }
 
-  // Use the tab with the most post links.
-  let best: { grid: Grid; sheetName: string; posts: number } | null = null;
+  const tabs: SheetTab[] = [];
   wb.eachSheet((ws) => {
     const grid = worksheetToGrid(ws);
     const analysis = analyzeSheet(grid);
-    const posts = analysis.ok ? analysis.layout.dataRows.length : 0;
-    if (!best || posts > best.posts) best = { grid, sheetName: ws.name, posts };
+    tabs.push({ name: ws.name, grid, posts: analysis.ok ? analysis.layout.dataRows.length : 0 });
   });
-  const chosen = best as { grid: Grid; sheetName: string; posts: number } | null;
-  if (!chosen) throw new FileReadError("That workbook has no sheets.");
-  return { grid: chosen.grid, xlsx: { buffer, sheetName: chosen.sheetName } };
+  if (tabs.length === 0) throw new FileReadError("That workbook has no sheets.");
+  // Default to the tab with the most post links.
+  const chosen = tabs.reduce((best, t) => (t.posts > best.posts ? t : best));
+  return { grid: chosen.grid, xlsx: { buffer, sheetName: chosen.name }, tabs };
 }

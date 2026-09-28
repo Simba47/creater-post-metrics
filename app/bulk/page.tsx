@@ -9,7 +9,7 @@ import { BATCH_MAX, BULK_MAX_URLS } from "@/lib/bulk/constants";
 import type { ScrapeResponse } from "@/lib/api/types";
 import { parseCsv } from "@/lib/bulk/csv";
 import { extractInstagramUrls } from "@/lib/bulk/extractUrls";
-import { ACCEPTED_FILE_TYPES, FileReadError, readSheetSource, type SheetSource } from "@/lib/bulk/readFile";
+import { ACCEPTED_FILE_TYPES, FileReadError, readSheetSource, type SheetSource, type SheetTab } from "@/lib/bulk/readFile";
 import {
   analyzeSheet,
   exportFilename,
@@ -94,6 +94,8 @@ export default function BulkPage() {
   const [sheetUrl, setSheetUrl] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [tabs, setTabs] = useState<SheetTab[]>([]);
+  const [currentTab, setCurrentTab] = useState("");
   const [loadingInput, setLoadingInput] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [showInvalid, setShowInvalid] = useState(false);
@@ -104,6 +106,10 @@ export default function BulkPage() {
   const [waitNote, setWaitNote] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const cancelRef = useRef(false);
+  // Bumped on every new input so a slow read of an earlier file can't overwrite a newer one.
+  const loadIdRef = useRef(0);
+  // The uploaded workbook, kept so the user can switch tabs (even from one without links).
+  const xlsxBufferRef = useRef<ArrayBuffer | null>(null);
 
   const toFetch = loaded ? loaded.layout.posts.slice(0, BULK_MAX_URLS) : [];
 
@@ -119,19 +125,34 @@ export default function BulkPage() {
   }, [rows]);
 
   function resetInput() {
+    loadIdRef.current++;
     setLoaded(null);
+    setTabs([]);
     setRows([]);
     setInputError(null);
     setShowInvalid(false);
   }
 
   function applySource(source: SheetSource) {
+    setTabs(source.tabs ?? []);
+    setCurrentTab(source.xlsx?.sheetName ?? "");
+    setInputError(null);
     const analysis = analyzeSheet(source.grid);
     if (!analysis.ok) {
+      setLoaded(null);
       setInputError(analysis.message);
       return;
     }
     setLoaded({ grid: analysis.grid, layout: analysis.layout, xlsx: source.xlsx });
+  }
+
+  function selectTab(name: string) {
+    const tab = tabs.find((t) => t.name === name);
+    const buffer = xlsxBufferRef.current;
+    if (!tab || !buffer) return;
+    setRows([]);
+    setShowInvalid(false);
+    applySource({ grid: tab.grid, xlsx: { buffer, sheetName: tab.name }, tabs });
   }
 
   async function onFile(e: ChangeEvent<HTMLInputElement>) {
@@ -139,15 +160,26 @@ export default function BulkPage() {
     e.target.value = "";
     if (!file) return;
     resetInput();
+    const loadId = loadIdRef.current;
     setFileName(file.name);
     setLoadingInput(true);
     try {
-      applySource(await readSheetSource(file));
+      const source = await readSheetSource(file);
+      if (loadId === loadIdRef.current) {
+        xlsxBufferRef.current = source.xlsx?.buffer ?? null;
+        applySource(source);
+      }
     } catch (err) {
-      setInputError(err instanceof FileReadError ? err.message : "Couldn't read that file.");
+      if (loadId === loadIdRef.current) setInputError(err instanceof FileReadError ? err.message : "Couldn't read that file.");
     } finally {
-      setLoadingInput(false);
+      if (loadId === loadIdRef.current) setLoadingInput(false);
     }
+  }
+
+  function clearFile() {
+    resetInput();
+    setFileName(null);
+    setLoadingInput(false);
   }
 
   async function onLoadSheet() {
@@ -311,11 +343,44 @@ export default function BulkPage() {
 
         <div className="mt-4">
           {mode === "file" && (
-            <label className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-zinc-300 px-4 py-8 text-center text-sm hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-500">
-              <span className="font-medium">{fileName ?? "Choose an Excel (.xlsx) or CSV file"}</span>
-              <span className="text-zinc-500 dark:text-zinc-400">Every sheet and column is scanned for Instagram links.</span>
-              <input type="file" accept={ACCEPTED_FILE_TYPES} onChange={onFile} disabled={running} className="sr-only" />
-            </label>
+            <div className="relative">
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-zinc-300 px-4 py-8 text-center text-sm hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-500">
+                <span className="font-medium">{fileName ?? "Choose an Excel (.xlsx) or CSV file"}</span>
+                <span className="text-zinc-500 dark:text-zinc-400">Every sheet and column is scanned for Instagram links.</span>
+                <input type="file" accept={ACCEPTED_FILE_TYPES} onChange={onFile} disabled={running} className="sr-only" />
+              </label>
+              {fileName && !running && (
+                <button
+                  type="button"
+                  onClick={clearFile}
+                  aria-label="Remove file"
+                  title="Remove file"
+                  className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full text-lg leading-none text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                >
+                  ×
+                </button>
+              )}
+              {tabs.length > 1 && (
+                <label className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+                  <span className="font-medium">Sheet tab:</span>
+                  <select
+                    value={currentTab}
+                    onChange={(e) => selectTab(e.target.value)}
+                    disabled={running}
+                    className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
+                  >
+                    {tabs.map((t) => (
+                      <option key={t.name} value={t.name}>
+                        {t.name.trim() || t.name} ({t.posts} post{t.posts === 1 ? "" : "s"})
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Tab missing? Download the sheet again, or paste its link under Google Sheet link.
+                  </span>
+                </label>
+              )}
+            </div>
           )}
 
           {mode === "sheet" && (
