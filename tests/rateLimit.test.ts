@@ -14,6 +14,17 @@ describe("createRateLimiter", () => {
   });
 });
 
+describe("createRateLimiter with cost", () => {
+  it("counts a batch as several units", () => {
+    const rl = createRateLimiter({ limit: 10, windowMs: 60_000 });
+    const t0 = 1_000_000;
+    expect(rl.check("a", t0, 5).allowed).toBe(true);
+    expect(rl.check("a", t0, 5).allowed).toBe(true);
+    expect(rl.check("a", t0 + 1000, 1)).toEqual({ allowed: false, retryAfterSec: 59 });
+    expect(rl.check("a", t0 + 60_000, 5).allowed).toBe(true);
+  });
+});
+
 describe("clientIp", () => {
   it("uses the first x-forwarded-for entry", () => {
     expect(clientIp(new Headers({ "x-forwarded-for": "1.2.3.4, 10.0.0.1" }))).toBe("1.2.3.4");

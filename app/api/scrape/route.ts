@@ -2,13 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { errorResponse, handleError } from "@/lib/api/respond";
 import type { ScrapeResponse } from "@/lib/api/types";
-import { getLatestSnapshot, getPostByShortcode, insertSnapshot, markFetched, upsertPost } from "@/lib/db/posts";
-import { getEnv } from "@/lib/env";
-import { getMediaByUrl } from "@/lib/hiker/media";
-import { getHikerClient } from "@/lib/hiker/server";
 import { parseInstagramUrl } from "@/lib/instagram/parseUrl";
-import { mapMedia } from "@/lib/metrics/mapper";
 import { clientIp, createRateLimiter } from "@/lib/rateLimit";
+import { scrapePost } from "@/lib/scrape";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,26 +41,7 @@ export async function POST(req: NextRequest) {
   const { shortcode, canonicalUrl } = parsed;
 
   try {
-    if (!body.data.force) {
-      const existing = await getPostByShortcode(shortcode);
-      const latest = existing ? await getLatestSnapshot(existing.id) : null;
-      if (existing && latest) {
-        const ageMs = Date.now() - new Date(latest.fetched_at).getTime();
-        if (ageMs < getEnv().CACHE_TTL_MINUTES * 60_000) {
-          return NextResponse.json<ScrapeResponse>({ post: existing, snapshot: latest, cached: true });
-        }
-      }
-    }
-
-    const { raw, source } = await getMediaByUrl(getHikerClient(), canonicalUrl, shortcode);
-    const metrics = mapMedia(raw, source);
-
-    // Keyed by the shortcode from the user's URL so cache lookups stay consistent.
-    const upserted = await upsertPost(shortcode, metrics);
-    const snapshot = await insertSnapshot(upserted.id, source, metrics, raw);
-    const post = await markFetched(upserted.id, snapshot.fetched_at);
-
-    return NextResponse.json<ScrapeResponse>({ post, snapshot, cached: false });
+    return NextResponse.json<ScrapeResponse>(await scrapePost(shortcode, canonicalUrl, body.data.force));
   } catch (err) {
     return handleError(err, "POST /api/scrape");
   }

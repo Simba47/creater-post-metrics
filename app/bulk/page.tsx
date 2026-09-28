@@ -1,0 +1,470 @@
+"use client";
+
+import Link from "next/link";
+import { useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { ErrorState, InfoTip, NumberCell, Spinner } from "@/components/ui";
+import { apiFetch, ApiClientError } from "@/lib/api/client";
+import type { BatchScrapeResponse, SheetFetchResponse } from "@/lib/api/types";
+import { BATCH_MAX, BULK_MAX_URLS } from "@/lib/bulk/constants";
+import { exportFilename, toCsv, toExportRows, toTsv, type BulkRow } from "@/lib/bulk/export";
+import { extractInstagramUrls, type ExtractedUrls } from "@/lib/bulk/extractUrls";
+import { ACCEPTED_FILE_TYPES, FileReadError, readSpreadsheetText } from "@/lib/bulk/readFile";
+import { nullReason } from "@/lib/metrics/nullReason";
+
+type Mode = "file" | "sheet" | "paste";
+
+const MODES: Array<{ id: Mode; label: string }> = [
+  { id: "file", label: "Upload Excel / CSV" },
+  { id: "sheet", label: "Google Sheet link" },
+  { id: "paste", label: "Paste URLs" },
+];
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function Button({
+  children,
+  onClick,
+  disabled,
+  primary,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={
+        primary
+          ? "rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          : "rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function StatusBadge({ row }: { row: BulkRow }) {
+  const base = "inline-flex rounded-full px-2 py-0.5 text-xs font-medium";
+  if (row.status === "pending") return <span className={`${base} text-zinc-500`}>Waiting</span>;
+  if (row.status === "error") {
+    return (
+      <InfoTip text={row.message}>
+        <span className={`${base} cursor-help bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-200`}>Failed</span>
+      </InfoTip>
+    );
+  }
+  return row.data.cached ? (
+    <span className={`${base} bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200`}>Cached</span>
+  ) : (
+    <span className={`${base} bg-emerald-100 text-emerald-900 dark:bg-emerald-900/40 dark:text-emerald-200`}>Fetched</span>
+  );
+}
+
+export default function BulkPage() {
+  const [mode, setMode] = useState<Mode>("file");
+  const [pasteText, setPasteText] = useState("");
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [extracted, setExtracted] = useState<ExtractedUrls | null>(null);
+  const [loadingInput, setLoadingInput] = useState(false);
+  const [inputError, setInputError] = useState<string | null>(null);
+  const [showInvalid, setShowInvalid] = useState(false);
+
+  const [force, setForce] = useState(false);
+  const [rows, setRows] = useState<BulkRow[]>([]);
+  const [running, setRunning] = useState(false);
+  const [waitNote, setWaitNote] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const cancelRef = useRef(false);
+
+  const toFetch = extracted ? extracted.valid.slice(0, BULK_MAX_URLS) : [];
+
+  const counts = useMemo(() => {
+    let fetched = 0, cached = 0, failed = 0, pending = 0;
+    for (const r of rows) {
+      if (r.status === "pending") pending++;
+      else if (r.status === "error") failed++;
+      else if (r.data.cached) cached++;
+      else fetched++;
+    }
+    return { fetched, cached, failed, pending, done: rows.length - pending };
+  }, [rows]);
+
+  function resetInput() {
+    setExtracted(null);
+    setInputError(null);
+    setShowInvalid(false);
+  }
+
+  function applyText(text: string) {
+    const result = extractInstagramUrls(text);
+    setExtracted(result);
+    if (result.valid.length === 0 && result.invalid.length === 0) {
+      setInputError("No Instagram links found. Put post or reel URLs in any column.");
+    }
+  }
+
+  async function onFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    resetInput();
+    setFileName(file.name);
+    setLoadingInput(true);
+    try {
+      applyText(await readSpreadsheetText(file));
+    } catch (err) {
+      setInputError(err instanceof FileReadError ? err.message : "Couldn't read that file.");
+    } finally {
+      setLoadingInput(false);
+    }
+  }
+
+  async function onLoadSheet() {
+    resetInput();
+    setLoadingInput(true);
+    try {
+      const { csv } = await apiFetch<SheetFetchResponse>("/api/bulk/sheet", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: sheetUrl }),
+      });
+      applyText(csv);
+    } catch (err) {
+      setInputError(err instanceof ApiClientError ? err.message : "Couldn't load that sheet.");
+    } finally {
+      setLoadingInput(false);
+    }
+  }
+
+  function onPaste(text: string) {
+    setPasteText(text);
+    resetInput();
+    if (text.trim()) applyText(text);
+  }
+
+  /** Fetches the given row indexes in batches, updating rows as results arrive. */
+  async function run(targetRows: BulkRow[], indexes: number[]) {
+    cancelRef.current = false;
+    setRunning(true);
+    setNotice(null);
+    try {
+      for (let i = 0; i < indexes.length; i += BATCH_MAX) {
+        if (cancelRef.current) break;
+        const chunk = indexes.slice(i, i + BATCH_MAX);
+        let response: BatchScrapeResponse | null = null;
+        let failure: string | null = null;
+
+        while (!cancelRef.current) {
+          try {
+            response = await apiFetch<BatchScrapeResponse>("/api/scrape/batch", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ urls: chunk.map((idx) => targetRows[idx]!.url), force }),
+            });
+            break;
+          } catch (err) {
+            if (err instanceof ApiClientError && err.code === "RATE_LIMITED") {
+              const wait = err.retryAfterSec ?? 15;
+              setWaitNote(`Pausing ${wait}s for the rate limit…`);
+              await sleep(wait * 1000);
+              setWaitNote(null);
+              continue;
+            }
+            failure = err instanceof ApiClientError ? err.message : "Unexpected error.";
+            break;
+          }
+        }
+
+        setRows((prev) => {
+          const next = [...prev];
+          chunk.forEach((idx, j) => {
+            const row = next[idx]!;
+            const item = response?.results[j];
+            if (item?.ok) next[idx] = { url: row.url, shortcode: row.shortcode, status: "done", data: item.data };
+            else if (item) next[idx] = { url: row.url, shortcode: row.shortcode, status: "error", code: item.error.code, message: item.error.message };
+            else if (failure) next[idx] = { url: row.url, shortcode: row.shortcode, status: "error", code: "UPSTREAM_ERROR", message: failure };
+          });
+          return next;
+        });
+      }
+    } finally {
+      setWaitNote(null);
+      setRunning(false);
+      if (cancelRef.current) setNotice("Stopped. Rows marked “Waiting” weren't fetched.");
+    }
+  }
+
+  function startAll() {
+    const initial: BulkRow[] = toFetch.map((v) => ({ url: v.url, shortcode: v.shortcode, status: "pending" }));
+    setRows(initial);
+    void run(initial, initial.map((_, i) => i));
+  }
+
+  function retryUnfinished() {
+    const indexes = rows.flatMap((r, i) => (r.status === "error" || r.status === "pending" ? [i] : []));
+    const next = rows.map((r): BulkRow =>
+      r.status === "error" ? { url: r.url, shortcode: r.shortcode, status: "pending" } : r,
+    );
+    setRows(next);
+    void run(next, indexes);
+  }
+
+  async function exportAs(kind: "csv" | "xlsx" | "pdf" | "sheets") {
+    const data = toExportRows(rows);
+    setNotice(null);
+    try {
+      if (kind === "sheets") {
+        await navigator.clipboard.writeText(toTsv(data));
+        setNotice("Copied! Open a Google Sheet (sheets.new), click cell A1 and paste (Ctrl/⌘ + V).");
+        return;
+      }
+      const files = await import("@/lib/bulk/exportFiles");
+      if (kind === "csv") files.downloadBlob(toCsv(data), "text/csv;charset=utf-8", exportFilename("csv"));
+      if (kind === "xlsx") {
+        files.downloadBlob(
+          await files.buildXlsx(data),
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          exportFilename("xlsx"),
+        );
+      }
+      if (kind === "pdf") files.downloadBlob(await files.buildPdf(data), "application/pdf", exportFilename("pdf"));
+    } catch (err) {
+      console.error(err);
+      setNotice(kind === "sheets" ? "Couldn't copy to the clipboard. Use the CSV or Excel download instead." : "Export failed. Please try again.");
+    }
+  }
+
+  const unfinished = counts.failed + (running ? 0 : counts.pending);
+  const progress = rows.length ? Math.round((counts.done / rows.length) * 100) : 0;
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <h1 className="text-2xl font-semibold tracking-tight">Bulk fetch</h1>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+          Load many post or reel URLs at once, fetch all their metrics, then download the results as CSV, Excel, PDF,
+          or copy them into Google Sheets. Links can be in any column.
+        </p>
+      </section>
+
+      {/* 1. Input */}
+      <section className="rounded-xl border border-zinc-200 bg-white p-4 sm:p-6 dark:border-zinc-800 dark:bg-zinc-950">
+        <div role="tablist" className="flex flex-wrap gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-900">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              role="tab"
+              aria-selected={mode === m.id}
+              disabled={running}
+              onClick={() => {
+                setMode(m.id);
+                resetInput();
+              }}
+              className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 ${
+                mode === m.id
+                  ? "bg-white shadow-sm dark:bg-zinc-800"
+                  : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-4">
+          {mode === "file" && (
+            <label className="flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-zinc-300 px-4 py-8 text-center text-sm hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-500">
+              <span className="font-medium">{fileName ?? "Choose an Excel (.xlsx) or CSV file"}</span>
+              <span className="text-zinc-500 dark:text-zinc-400">Every sheet and column is scanned for Instagram links.</span>
+              <input type="file" accept={ACCEPTED_FILE_TYPES} onChange={onFile} disabled={running} className="sr-only" />
+            </label>
+          )}
+
+          {mode === "sheet" && (
+            <div className="space-y-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="url"
+                  value={sheetUrl}
+                  onChange={(e) => setSheetUrl(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/…/edit"
+                  className="min-w-0 flex-1 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
+                />
+                <Button primary onClick={() => void onLoadSheet()} disabled={!sheetUrl.trim() || loadingInput || running}>
+                  Load sheet
+                </Button>
+              </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                The sheet must be shared as <strong>Anyone with the link → Viewer</strong>. The tab in your link is the
+                one that&apos;s read.
+              </p>
+            </div>
+          )}
+
+          {mode === "paste" && (
+            <textarea
+              value={pasteText}
+              onChange={(e) => onPaste(e.target.value)}
+              disabled={running}
+              rows={6}
+              placeholder={"https://www.instagram.com/reel/…\nhttps://www.instagram.com/p/…"}
+              className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 font-mono text-sm outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          )}
+        </div>
+
+        {loadingInput && <Spinner label="Reading…" />}
+        {inputError && (
+          <div className="mt-4">
+            <ErrorState title="Couldn't use that input" message={inputError} />
+          </div>
+        )}
+
+        {extracted && (extracted.valid.length > 0 || extracted.invalid.length > 0) && (
+          <div className="mt-4 space-y-3 border-t border-zinc-200 pt-4 text-sm dark:border-zinc-800">
+            <p>
+              Found <strong>{extracted.valid.length}</strong> post{extracted.valid.length === 1 ? "" : "s"}
+              {extracted.duplicates > 0 && <span className="text-zinc-500"> · {extracted.duplicates} duplicates skipped</span>}
+              {extracted.invalid.length > 0 && (
+                <>
+                  <span className="text-zinc-500"> · </span>
+                  <button onClick={() => setShowInvalid((s) => !s)} className="text-zinc-500 underline underline-offset-4">
+                    {extracted.invalid.length} link{extracted.invalid.length === 1 ? "" : "s"} can&apos;t be used
+                  </button>
+                </>
+              )}
+            </p>
+            {showInvalid && (
+              <ul className="max-h-48 space-y-1 overflow-auto rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-900">
+                {extracted.invalid.map((x) => (
+                  <li key={x.url}>
+                    <span className="break-all font-mono">{x.url}</span>
+                    <span className="text-zinc-500"> — {x.message}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {extracted.valid.length > BULK_MAX_URLS && (
+              <p className="text-amber-700 dark:text-amber-300">
+                Only the first {BULK_MAX_URLS} will be fetched. Split larger lists into several runs.
+              </p>
+            )}
+
+            {toFetch.length > 0 && (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <Button primary onClick={startAll} disabled={running}>
+                  Fetch {toFetch.length} post{toFetch.length === 1 ? "" : "s"}
+                </Button>
+                <label className="inline-flex items-center gap-2 text-zinc-600 dark:text-zinc-400">
+                  <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} disabled={running} className="h-4 w-4" />
+                  Force refresh
+                </label>
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Uses up to {toFetch.length} HikerAPI requests. Posts fetched recently are reused for free
+                  {force ? " (except with Force refresh)" : ""}.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* 2. Progress + export */}
+      {rows.length > 0 && (
+        <section className="space-y-4">
+          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <p className="tabular-nums">
+                <strong>
+                  {counts.done} / {rows.length}
+                </strong>{" "}
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  · {counts.fetched} fetched · {counts.cached} cached · {counts.failed} failed
+                </span>
+              </p>
+              <div className="flex gap-2">
+                {running ? (
+                  <Button onClick={() => (cancelRef.current = true)}>Stop</Button>
+                ) : (
+                  unfinished > 0 && <Button onClick={retryUnfinished}>Retry {unfinished} unfinished</Button>
+                )}
+              </div>
+            </div>
+            <div
+              className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
+              role="progressbar"
+              aria-valuenow={progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div className="h-full rounded-full bg-zinc-900 transition-all dark:bg-zinc-100" style={{ width: `${progress}%` }} />
+            </div>
+            {waitNote && <p className="mt-2 text-xs text-zinc-500">{waitNote}</p>}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">Download:</span>
+            <Button onClick={() => void exportAs("xlsx")} disabled={running}>Excel</Button>
+            <Button onClick={() => void exportAs("csv")} disabled={running}>CSV</Button>
+            <Button onClick={() => void exportAs("pdf")} disabled={running}>PDF</Button>
+            <Button onClick={() => void exportAs("sheets")} disabled={running}>Copy for Google Sheets</Button>
+          </div>
+          {notice && <p className="text-sm text-zinc-600 dark:text-zinc-300">{notice}</p>}
+
+          <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+            <table className="w-full min-w-[880px] text-sm">
+              <thead className="border-b border-zinc-200 text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                <tr>
+                  <th scope="col" className="px-3 py-2 text-left font-medium">Post</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">Views</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">Likes</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">Comments</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">Shares</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">Reposts</th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">Saves</th>
+                  <th scope="col" className="px-3 py-2 text-left font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-900">
+                {rows.map((r) => {
+                  const s = r.status === "done" ? r.data.snapshot : null;
+                  const name = r.status === "done" && r.data.post.owner_username ? `@${r.data.post.owner_username}` : r.shortcode;
+                  const cell = (v: number | null | undefined, reason: Parameters<typeof nullReason>[0]) =>
+                    s ? <NumberCell value={v ?? null} reason={nullReason(reason, s)} /> : <span className="text-zinc-300 dark:text-zinc-700">·</span>;
+                  return (
+                    <tr key={r.shortcode}>
+                      <td className="px-3 py-2">
+                        {r.status === "done" ? (
+                          <Link href={`/posts/${r.shortcode}`} className="font-medium underline-offset-4 hover:underline">
+                            {name}
+                          </Link>
+                        ) : (
+                          <span className="font-mono text-xs">{name}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">{cell(s?.play_count, "views")}</td>
+                      <td className="px-3 py-2 text-right">{cell(s?.like_count, "likes")}</td>
+                      <td className="px-3 py-2 text-right">{cell(s?.comment_count, "comments")}</td>
+                      <td className="px-3 py-2 text-right">{cell(s?.reshare_count, "shares")}</td>
+                      <td className="px-3 py-2 text-right">{cell(s?.repost_count, "reposts")}</td>
+                      <td className="px-3 py-2 text-right">{cell(s?.save_count, "saves")}</td>
+                      <td className="px-3 py-2">
+                        <StatusBadge row={r} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}

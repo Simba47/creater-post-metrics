@@ -22,6 +22,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/" className="hover:text-zinc-900 dark:hover:text-zinc-100">
                 Fetch
               </Link>
+              <Link href="/bulk" className="hover:text-zinc-900 dark:hover:text-zinc-100">
+                Bulk
+              </Link>
               <Link href="/posts" className="hover:text-zinc-900 dark:hover:text-zinc-100">
                 Tracked posts
               </Link>

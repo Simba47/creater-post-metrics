@@ -125,6 +125,14 @@ Response `200`:
 
 `raw_json` is stored in the database but left out of API responses.
 
+### `POST /api/scrape/batch`
+
+Same as `/api/scrape`, for 1–5 URLs at once: `{ "urls": ["…", "…"], "force": false }`. Returns `{ results: [{ url, ok: true, data: ScrapeResponse } | { url, ok: false, error: { code, message } }] }` in input order, so one bad URL doesn't fail the batch. Rate limit: 120 URLs per minute per IP. `maxDuration` is 60s.
+
+### `POST /api/bulk/sheet`
+
+`{ "url": "<Google Sheets link>" }` returns `{ csv }`, the linked tab as CSV. Only `docs.google.com` links are accepted, and redirects are only followed through Google hosts, so this can't be used to fetch other sites. The response is capped at 5 MB, with a rate limit of 10 per minute per IP.
+
 ### `GET /api/posts`
 
 Lists tracked posts, each with its latest snapshot.
@@ -144,6 +152,27 @@ Returns `{ post, snapshots }`, with snapshots newest first (capped at 500). Retu
 
 ---
 
+## Bulk fetch (`/bulk`)
+
+Fetch many posts at once and download the results.
+
+1. **Load URLs**, one of three ways:
+   - **Upload** an Excel (`.xlsx`) or CSV file. Every sheet and cell is scanned, including cells whose visible text links to a post.
+   - **Google Sheet link.** The sheet must be shared as *Anyone with the link → Viewer*. The tab in the link (`gid`) is the one read.
+   - **Paste** URLs, in any format.
+
+   Links can be in any column. Duplicates (same post) are skipped, and links that aren't posts (stories, profiles, share links) are listed with the reason. Old `.xls` files must be re-saved as `.xlsx`.
+2. **Fetch.** Up to 500 posts per run, 5 per request. Each post is stored as a snapshot, exactly like a single fetch, and the cache applies unless **Force refresh** is ticked. You can stop a run, and **Retry unfinished** re-runs failed or skipped rows.
+3. **Download:**
+   - **Excel:** numbers, dates and percentages are typed cells, URLs are clickable, and the header is frozen with filters.
+   - **CSV:** UTF-8 with a BOM, so emoji and non-Latin captions open correctly in Excel.
+   - **PDF:** a landscape summary table without URLs or captions. Usernames link to the posts.
+   - **Copy for Google Sheets:** copies tab-separated rows; paste into cell A1 of a sheet.
+
+   In every format, unknown values are empty cells (`-` in the PDF), never 0.
+
+Cost: roughly 1 HikerAPI request per post that isn't served from cache (2 if it falls back to v1).
+
 ## Metric availability
 
 **Rule: a missing value is stored as `null`, never `0`.** `0` means a real zero. The UI shows `—` for nulls, with a tooltip that explains why.
@@ -155,8 +184,8 @@ Returns `{ post, snapshots }`, with snapshots newest first (capped at 500). Retu
 | Likes | `like_count` | Public unless the creator hid like counts (`like_and_view_counts_disabled`) |
 | Comments | `comment_count` | Public |
 | Shares | `reshare_count` | v2 only. `null` when the creator disabled share counts (`share_count_disabled`). |
-| Reposts | `media_repost_count` | v2 only, and only for some posts (absent on a Jul 2025 reel; reposts launched Aug 2025) |
-| Saves | `save_count` | v2 only, and Instagram omits it for some posts. Stored exactly as returned, never estimated or derived. |
+| Reposts | `media_repost_count` | v2 only. Instagram sometimes omits it; a later fetch of the same post often includes it. |
+| Saves | `save_count` | v2 only, and omitted intermittently like reposts. Stored exactly as returned, never estimated or derived. |
 
 ### v2 vs the v1 fallback
 
@@ -175,7 +204,7 @@ Shown only when views are known and non-zero: `(likes + comments + shares) / vie
 
 ## Known limitations
 
-- **Rate limiting is in-memory.** The 20/min per-IP limit on `/api/scrape` lives in the serverless instance's memory. On Vercel it's per instance and resets on cold starts. Move it to Upstash Redis (or similar) before real traffic.
+- **Rate limiting is in-memory.** The per-IP limits (20/min on `/api/scrape`, 120 URLs/min on `/api/scrape/batch`, 10/min on `/api/bulk/sheet`) live in the serverless instance's memory. On Vercel it's per instance and resets on cold starts. Move it to Upstash Redis (or similar) before real traffic.
 - **The cache is time-based only.** Every new snapshot is one HikerAPI request (two if it falls back to v1). `Force refresh` and the detail page's "Fetch new snapshot" skip the cache.
 - **Snapshots only exist when someone fetches.** There are no scheduled refreshes yet, so history is only as dense as manual fetches.
 - **Share links (`instagram.com/share/...`) are rejected.** Resolving them would need a server-side redirect follow, which Instagram often blocks. Users are asked to paste the final URL.
@@ -183,7 +212,9 @@ Shown only when views are known and non-zero: `(likes + comments + shares) / vie
 - **v1 fallback snapshots are sparse.** They have no shares, reposts, saves or IG/FB split (see above).
 - **Posts are keyed by the shortcode from the user's URL.** If Instagram ever returns a different `code` for the same media (e.g. a private-share code), they'd be stored as two posts.
 - **Post metadata upserts skip nulls.** A later response missing a field (e.g. a v1 fallback with no caption) won't wipe a stored value. This also means a caption the creator deleted stays stored.
-- **No auth.** Anyone who can reach the deployment can trigger HikerAPI calls, limited only by the per-IP rate limit.
+- **No auth.** Anyone who can reach the deployment can trigger HikerAPI calls, limited only by the per-IP rate limit. Bulk fetch makes this cheaper to abuse (up to 120 posts a minute).
+- **Bulk runs live in the browser tab.** Closing the tab stops the run. Everything fetched so far is saved, but the result list isn't, so re-load the URLs to export again (fetches within the cache window are free).
+- **Google Sheets export is copy/paste.** Writing directly into a new Google Sheet would need a Google Cloud project and OAuth sign-in.
 
 ### Open `TODO(verify with probe)` items
 
@@ -205,9 +236,12 @@ Shown only when views are known and non-zero: `(likes + comments + shares) / vie
 ```
 app/
   page.tsx                      Fetch form + metrics card
+  bulk/page.tsx                 Bulk fetch: load URLs, progress, export
   posts/page.tsx                Tracked posts table (sortable, paginated)
   posts/[shortcode]/page.tsx    Detail: latest metrics, charts, snapshot history
   api/scrape/route.ts           POST: fetch + store a snapshot
+  api/scrape/batch/route.ts     POST: same for up to 5 URLs
+  api/bulk/sheet/route.ts       POST: public Google Sheet → CSV
   api/posts/route.ts            GET: list posts with latest snapshot
   api/posts/[shortcode]/route.ts GET: post + all snapshots
 components/                     MetricsCard, MetricChart, PostDetail, shared UI bits
@@ -219,6 +253,8 @@ lib/
   metrics/mapper.ts             mapV2Media / mapV1Media → NormalizedMetrics
   metrics/engagement.ts         engagement rate
   db/                           Supabase client, typed schema, queries
+  bulk/                         URL extraction, file/sheet reading, CSV/TSV/Excel/PDF export
+  scrape.ts                     cache check → HikerAPI → store (shared by both scrape routes)
   rateLimit.ts                  in-memory per-IP limiter
 scripts/probe.ts                capture real payloads
 supabase/migrations/            001_init.sql, 002_repost_count.sql
