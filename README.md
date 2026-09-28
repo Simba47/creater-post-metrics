@@ -152,26 +152,35 @@ Returns `{ post, snapshots }`, with snapshots newest first (capped at 500). Retu
 
 ---
 
-## Bulk fetch (`/bulk`)
+## Bulk fetch (`/bulk`): campaign report
 
-Fetch many posts at once and download the results.
+Fills in a campaign sheet. You keep your own columns (NAME, FOLLOWERS, IG LINK, AVG. REACH, …); the app fills the metric columns and a totals row.
 
-1. **Load URLs**, one of three ways:
-   - **Upload** an Excel (`.xlsx`) or CSV file. Every sheet and cell is scanned, including cells whose visible text links to a post.
-   - **Google Sheet link.** The sheet must be shared as *Anyone with the link → Viewer*. The tab in the link (`gid`) is the one read.
-   - **Paste** URLs, in any format.
+1. **Load a sheet**, one of three ways:
+   - **Upload** an Excel (`.xlsx`) or CSV file. In a workbook, the tab with the most post links is used.
+   - **Google Sheet link.** It must be shared as *Anyone with the link → Viewer*; the tab in the link (`gid`) is read.
+   - **Paste** links. They become a one-column sheet (`POSTED LINK`) plus the metric columns.
 
-   Links can be in any column. Duplicates (same post) are skipped, and links that aren't posts (stories, profiles, share links) are listed with the reason. Old `.xls` files must be re-saved as `.xlsx`.
-2. **Fetch.** Up to 500 posts per run, 5 per request. Each post is stored as a snapshot, exactly like a single fetch, and the cache applies unless **Force refresh** is ticked. You can stop a run, and **Retry unfinished** re-runs failed or skipped rows.
-3. **Download:**
-   - **Excel:** numbers, dates and percentages are typed cells, URLs are clickable, and the header is frozen with filters.
-   - **CSV:** UTF-8 with a BOM, so emoji and non-Latin captions open correctly in Excel.
-   - **PDF:** a landscape summary table without URLs or captions. Usernames link to the posts.
-   - **Copy for Google Sheets:** copies tab-separated rows; paste into cell A1 of a sheet.
+   The **link column** is whichever column holds the most post/reel URLs, so a column of profile links (IG LINK) is never used. The header row is found by its column names; rows above it (e.g. a title) are kept.
+2. **Filled columns**, matched by header name in any order (case and punctuation ignored). Missing ones are added at the end:
 
-   In every format, unknown values are empty cells (`-` in the PDF), never 0.
+   | Column | Value |
+   |---|---|
+   | POSTED DATE | Post date (`dd/mm/yyyy`, viewer's local day) |
+   | VIEWS / LIKES / COMMENTS | `play_count` / `like_count` / `comment_count` |
+   | REPOST / SHARE / SAVES | `media_repost_count` / `reshare_count` / `save_count` |
+   | T. ENG | LIKES + COMMENTS + REPOST + SHARE + SAVES (known values only) |
+   | ENG. % | T. ENG ÷ VIEWS |
 
-Cost: roughly 1 HikerAPI request per post that isn't served from cache (2 if it falls back to v1).
+   A cell is only overwritten with a real value. If a fetch fails or Instagram omits a metric, whatever was already in the cell stays.
+3. **Totals row:** sums of every count column, and ENG. % = total T. ENG ÷ total VIEWS. An existing totals row directly below the data is reused; otherwise one is added, inserting a row if the next row is in use.
+4. **Download:**
+   - **Excel.** For an uploaded `.xlsx`, this is *your own workbook* filled in place, so colours, borders, widths, other tabs and other columns are kept. For other inputs it's a new workbook in the same style (yellow bold header, borders, bold totals).
+   - **CSV:** UTF-8 with a BOM.
+   - **PDF:** landscape, same table.
+   - **Copy for Google Sheets:** tab-separated; paste into cell A1.
+
+Rows that repeat a post are fetched once and filled in every row. Up to 500 posts per run, 5 per request, with stop and retry-unfinished. Cost: about 1 HikerAPI request per post not served from cache.
 
 ## Metric availability
 

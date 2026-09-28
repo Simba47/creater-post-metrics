@@ -1,42 +1,74 @@
-// Reads an uploaded spreadsheet into plain text for extractInstagramUrls. Runs in the browser.
+// Loads an uploaded spreadsheet as a grid. Runs in the browser.
+import type { CellValue, Worksheet } from "exceljs";
+import { parseCsv } from "./csv";
+import { analyzeSheet, type Cell, type Grid } from "./report";
 
 export const ACCEPTED_FILE_TYPES = ".xlsx,.csv,.txt";
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 export class FileReadError extends Error {}
 
-/** Returns every cell's text (and any hyperlink target) from every sheet, one per line. */
-export async function readSpreadsheetText(file: File): Promise<string> {
+export interface SheetSource {
+  grid: Grid;
+  /** Set for .xlsx uploads so the download can be the user's own workbook, filled in place. */
+  xlsx: { buffer: ArrayBuffer; sheetName: string } | null;
+}
+
+function toCell(v: CellValue): Cell {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number" || typeof v === "string") return v;
+  if (v instanceof Date) return v;
+  if (typeof v === "boolean") return String(v);
+  if (typeof v === "object") {
+    // A cell showing "Post 1" can still link to the real URL; prefer the link target.
+    if ("hyperlink" in v && typeof v.hyperlink === "string") return v.hyperlink;
+    if ("richText" in v) return v.richText.map((t) => t.text).join("");
+    if ("result" in v) return toCell((v.result ?? null) as CellValue);
+    if ("text" in v && typeof v.text === "string") return v.text;
+  }
+  return null;
+}
+
+/** Row/column 1-based in Excel → 0-based grid. Empty rows are kept so indexes line up. */
+export function worksheetToGrid(ws: Worksheet): Grid {
+  const grid: Grid = [];
+  for (let r = 1; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const cells: Cell[] = [];
+    for (let c = 1; c <= ws.columnCount; c++) cells.push(toCell(row.getCell(c).value));
+    grid.push(cells);
+  }
+  return grid;
+}
+
+export async function readSheetSource(file: File): Promise<SheetSource> {
   if (file.size > MAX_FILE_BYTES) throw new FileReadError("That file is over 10 MB.");
   const name = file.name.toLowerCase();
 
-  if (name.endsWith(".csv") || name.endsWith(".txt")) return file.text();
-
+  if (name.endsWith(".csv") || name.endsWith(".txt")) return { grid: parseCsv(await file.text()), xlsx: null };
   if (name.endsWith(".xls")) {
     throw new FileReadError("Old .xls files aren't supported. In Excel choose File → Save As → .xlsx, then upload that.");
   }
-  if (!name.endsWith(".xlsx")) {
-    throw new FileReadError("Upload an Excel (.xlsx) or CSV file.");
-  }
+  if (!name.endsWith(".xlsx")) throw new FileReadError("Upload an Excel (.xlsx) or CSV file.");
 
+  const buffer = await file.arrayBuffer();
   const { default: ExcelJS } = await import("exceljs");
   const wb = new ExcelJS.Workbook();
   try {
-    await wb.xlsx.load(await file.arrayBuffer());
+    await wb.xlsx.load(buffer);
   } catch {
     throw new FileReadError("Couldn't read that Excel file. Is it a valid .xlsx?");
   }
 
-  const parts: string[] = [];
-  wb.eachSheet((sheet) => {
-    sheet.eachRow((row) => {
-      row.eachCell((cell) => {
-        parts.push(cell.text);
-        // A cell showing "Post 1" can still link to the real URL.
-        const link = cell.hyperlink ?? (typeof cell.value === "object" && cell.value && "hyperlink" in cell.value ? cell.value.hyperlink : undefined);
-        if (typeof link === "string") parts.push(link);
-      });
-    });
+  // Use the tab with the most post links.
+  let best: { grid: Grid; sheetName: string; posts: number } | null = null;
+  wb.eachSheet((ws) => {
+    const grid = worksheetToGrid(ws);
+    const analysis = analyzeSheet(grid);
+    const posts = analysis.ok ? analysis.layout.dataRows.length : 0;
+    if (!best || posts > best.posts) best = { grid, sheetName: ws.name, posts };
   });
-  return parts.join("\n");
+  const chosen = best as { grid: Grid; sheetName: string; posts: number } | null;
+  if (!chosen) throw new FileReadError("That workbook has no sheets.");
+  return { grid: chosen.grid, xlsx: { buffer, sheetName: chosen.sheetName } };
 }

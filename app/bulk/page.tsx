@@ -6,9 +6,20 @@ import { ErrorState, InfoTip, NumberCell, Spinner } from "@/components/ui";
 import { apiFetch, ApiClientError } from "@/lib/api/client";
 import type { BatchScrapeResponse, SheetFetchResponse } from "@/lib/api/types";
 import { BATCH_MAX, BULK_MAX_URLS } from "@/lib/bulk/constants";
-import { exportFilename, toCsv, toExportRows, toTsv, type BulkRow } from "@/lib/bulk/export";
-import { extractInstagramUrls, type ExtractedUrls } from "@/lib/bulk/extractUrls";
-import { ACCEPTED_FILE_TYPES, FileReadError, readSpreadsheetText } from "@/lib/bulk/readFile";
+import type { ScrapeResponse } from "@/lib/api/types";
+import { parseCsv } from "@/lib/bulk/csv";
+import { extractInstagramUrls } from "@/lib/bulk/extractUrls";
+import { ACCEPTED_FILE_TYPES, FileReadError, readSheetSource, type SheetSource } from "@/lib/bulk/readFile";
+import {
+  analyzeSheet,
+  exportFilename,
+  fillReport,
+  REPORT_METRICS,
+  reportToCsv,
+  reportToTsv,
+  type Grid,
+  type ReportLayout,
+} from "@/lib/bulk/report";
 import { nullReason } from "@/lib/metrics/nullReason";
 
 type Mode = "file" | "sheet" | "paste";
@@ -20,6 +31,18 @@ const MODES: Array<{ id: Mode; label: string }> = [
 ];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** One unique post in a run. */
+type BulkRow =
+  | { url: string; shortcode: string; status: "pending" }
+  | { url: string; shortcode: string; status: "done"; data: ScrapeResponse }
+  | { url: string; shortcode: string; status: "error"; code: string; message: string };
+
+interface Loaded {
+  grid: Grid;
+  layout: ReportLayout;
+  xlsx: SheetSource["xlsx"];
+}
 
 function Button({
   children,
@@ -70,7 +93,7 @@ export default function BulkPage() {
   const [pasteText, setPasteText] = useState("");
   const [sheetUrl, setSheetUrl] = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
-  const [extracted, setExtracted] = useState<ExtractedUrls | null>(null);
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [loadingInput, setLoadingInput] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [showInvalid, setShowInvalid] = useState(false);
@@ -82,7 +105,7 @@ export default function BulkPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const cancelRef = useRef(false);
 
-  const toFetch = extracted ? extracted.valid.slice(0, BULK_MAX_URLS) : [];
+  const toFetch = loaded ? loaded.layout.posts.slice(0, BULK_MAX_URLS) : [];
 
   const counts = useMemo(() => {
     let fetched = 0, cached = 0, failed = 0, pending = 0;
@@ -96,17 +119,19 @@ export default function BulkPage() {
   }, [rows]);
 
   function resetInput() {
-    setExtracted(null);
+    setLoaded(null);
+    setRows([]);
     setInputError(null);
     setShowInvalid(false);
   }
 
-  function applyText(text: string) {
-    const result = extractInstagramUrls(text);
-    setExtracted(result);
-    if (result.valid.length === 0 && result.invalid.length === 0) {
-      setInputError("No Instagram links found. Put post or reel URLs in any column.");
+  function applySource(source: SheetSource) {
+    const analysis = analyzeSheet(source.grid);
+    if (!analysis.ok) {
+      setInputError(analysis.message);
+      return;
     }
+    setLoaded({ grid: analysis.grid, layout: analysis.layout, xlsx: source.xlsx });
   }
 
   async function onFile(e: ChangeEvent<HTMLInputElement>) {
@@ -117,7 +142,7 @@ export default function BulkPage() {
     setFileName(file.name);
     setLoadingInput(true);
     try {
-      applyText(await readSpreadsheetText(file));
+      applySource(await readSheetSource(file));
     } catch (err) {
       setInputError(err instanceof FileReadError ? err.message : "Couldn't read that file.");
     } finally {
@@ -134,7 +159,7 @@ export default function BulkPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ url: sheetUrl }),
       });
-      applyText(csv);
+      applySource({ grid: parseCsv(csv), xlsx: null });
     } catch (err) {
       setInputError(err instanceof ApiClientError ? err.message : "Couldn't load that sheet.");
     } finally {
@@ -145,7 +170,12 @@ export default function BulkPage() {
   function onPaste(text: string) {
     setPasteText(text);
     resetInput();
-    if (text.trim()) applyText(text);
+    if (!text.trim()) return;
+    // Pasted links become a one-column sheet: POSTED LINK + the filled metric columns.
+    const found = extractInstagramUrls(text);
+    const links = [...found.valid.map((v) => v.url), ...found.invalid.map((x) => x.url)];
+    if (links.length === 0) setInputError("No Instagram links found.");
+    else applySource({ grid: [["POSTED LINK"], ...links.map((l) => [l])], xlsx: null });
   }
 
   /** Fetches the given row indexes in batches, updating rows as results arrive. */
@@ -216,24 +246,25 @@ export default function BulkPage() {
   }
 
   async function exportAs(kind: "csv" | "xlsx" | "pdf" | "sheets") {
-    const data = toExportRows(rows);
+    if (!loaded) return;
+    const results = new Map(rows.flatMap((r) => (r.status === "done" ? [[r.shortcode, r.data] as const] : [])));
+    const filled = fillReport(loaded.grid, loaded.layout, results);
     setNotice(null);
     try {
       if (kind === "sheets") {
-        await navigator.clipboard.writeText(toTsv(data));
+        await navigator.clipboard.writeText(reportToTsv(filled, loaded.layout));
         setNotice("Copied! Open a Google Sheet (sheets.new), click cell A1 and paste (Ctrl/⌘ + V).");
         return;
       }
       const files = await import("@/lib/bulk/exportFiles");
-      if (kind === "csv") files.downloadBlob(toCsv(data), "text/csv;charset=utf-8", exportFilename("csv"));
+      if (kind === "csv") files.downloadBlob(reportToCsv(filled, loaded.layout), "text/csv;charset=utf-8", exportFilename("csv"));
       if (kind === "xlsx") {
-        files.downloadBlob(
-          await files.buildXlsx(data),
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          exportFilename("xlsx"),
-        );
+        const data = loaded.xlsx
+          ? await files.fillWorkbook(loaded.xlsx.buffer, loaded.xlsx.sheetName, filled, loaded.layout)
+          : await files.buildStyledWorkbook(filled, loaded.layout);
+        files.downloadBlob(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", exportFilename("xlsx"));
       }
-      if (kind === "pdf") files.downloadBlob(await files.buildPdf(data), "application/pdf", exportFilename("pdf"));
+      if (kind === "pdf") files.downloadBlob(await files.buildPdf(filled, loaded.layout), "application/pdf", exportFilename("pdf"));
     } catch (err) {
       console.error(err);
       setNotice(kind === "sheets" ? "Couldn't copy to the clipboard. Use the CSV or Excel download instead." : "Export failed. Please try again.");
@@ -248,8 +279,9 @@ export default function BulkPage() {
       <section>
         <h1 className="text-2xl font-semibold tracking-tight">Bulk fetch</h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Load many post or reel URLs at once, fetch all their metrics, then download the results as CSV, Excel, PDF,
-          or copy them into Google Sheets. Links can be in any column.
+          Upload your campaign sheet (or a Google Sheet / pasted links). The app finds the post links, fetches
+          every post, and fills in POSTED DATE, VIEWS, LIKES, COMMENTS, REPOST, SHARE, SAVES, T. ENG and ENG. % plus a
+          totals row. Your other columns (name, followers, reach…) stay as they are.
         </p>
       </section>
 
@@ -326,31 +358,49 @@ export default function BulkPage() {
           </div>
         )}
 
-        {extracted && (extracted.valid.length > 0 || extracted.invalid.length > 0) && (
+        {loaded && (
           <div className="mt-4 space-y-3 border-t border-zinc-200 pt-4 text-sm dark:border-zinc-800">
             <p>
-              Found <strong>{extracted.valid.length}</strong> post{extracted.valid.length === 1 ? "" : "s"}
-              {extracted.duplicates > 0 && <span className="text-zinc-500"> · {extracted.duplicates} duplicates skipped</span>}
-              {extracted.invalid.length > 0 && (
+              Found <strong>{loaded.layout.posts.length}</strong> post{loaded.layout.posts.length === 1 ? "" : "s"} in
+              the <strong>{loaded.layout.linkHeader}</strong> column
+              {loaded.xlsx && <> of sheet <strong>{loaded.xlsx.sheetName}</strong></>}
+              {loaded.layout.duplicates > 0 && (
+                <span className="text-zinc-500"> · {loaded.layout.duplicates} rows repeat a post (fetched once)</span>
+              )}
+              {loaded.layout.invalid.length > 0 && (
                 <>
                   <span className="text-zinc-500"> · </span>
                   <button onClick={() => setShowInvalid((s) => !s)} className="text-zinc-500 underline underline-offset-4">
-                    {extracted.invalid.length} link{extracted.invalid.length === 1 ? "" : "s"} can&apos;t be used
+                    {loaded.layout.invalid.length} link{loaded.layout.invalid.length === 1 ? "" : "s"} can&apos;t be used
                   </button>
                 </>
               )}
             </p>
+            <p className="text-zinc-600 dark:text-zinc-400">
+              Will fill{" "}
+              {REPORT_METRICS.map((m, i) => (
+                <span key={m.key}>
+                  {i > 0 && ", "}
+                  <span className={loaded.layout.addedMetrics.includes(m.key) ? "italic" : "font-medium text-zinc-900 dark:text-zinc-100"}>
+                    {m.header}
+                  </span>
+                </span>
+              ))}{" "}
+              and a totals row.
+              {loaded.layout.addedMetrics.length > 0 && " Columns in italics aren't in your sheet and will be added at the end."}
+              {" "}Everything else in your sheet stays as it is.
+            </p>
             {showInvalid && (
               <ul className="max-h-48 space-y-1 overflow-auto rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-900">
-                {extracted.invalid.map((x) => (
-                  <li key={x.url}>
+                {loaded.layout.invalid.map((x) => (
+                  <li key={`${x.row}-${x.url}`}>
                     <span className="break-all font-mono">{x.url}</span>
                     <span className="text-zinc-500"> — {x.message}</span>
                   </li>
                 ))}
               </ul>
             )}
-            {extracted.valid.length > BULK_MAX_URLS && (
+            {loaded.layout.posts.length > BULK_MAX_URLS && (
               <p className="text-amber-700 dark:text-amber-300">
                 Only the first {BULK_MAX_URLS} will be fetched. Split larger lists into several runs.
               </p>
@@ -410,7 +460,9 @@ export default function BulkPage() {
 
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">Download:</span>
-            <Button onClick={() => void exportAs("xlsx")} disabled={running}>Excel</Button>
+            <Button onClick={() => void exportAs("xlsx")} disabled={running}>
+              {loaded?.xlsx ? "Excel (your sheet, filled)" : "Excel"}
+            </Button>
             <Button onClick={() => void exportAs("csv")} disabled={running}>CSV</Button>
             <Button onClick={() => void exportAs("pdf")} disabled={running}>PDF</Button>
             <Button onClick={() => void exportAs("sheets")} disabled={running}>Copy for Google Sheets</Button>
