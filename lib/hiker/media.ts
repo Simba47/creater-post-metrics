@@ -47,7 +47,11 @@ function errorForStatus(res: HikerResponse, endpoint: string): AppError {
     // Observed: { state: false, error: "Top up your account…", exc_type: "InsufficientFunds" }
     return new AppError("UPSTREAM_ERROR", "The metrics provider account is out of credits. Top up the HikerAPI balance.");
   }
-  // 401/5xx and anything else unexpected: our key or their outage.
+  if (status === 401) {
+    // Observed: { state: false, error: "Unauthorized request: pass access_key or login via …" }
+    return new AppError("UPSTREAM_ERROR", "The metrics provider rejected our API key. Check HIKER_API_KEY.");
+  }
+  // 5xx and anything else unexpected: their outage.
   return new AppError("UPSTREAM_ERROR", `The metrics provider returned an error (HTTP ${status} from ${endpoint}).`);
 }
 

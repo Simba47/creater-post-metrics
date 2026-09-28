@@ -133,7 +133,10 @@ describe("getMediaByUrl", () => {
     const { client, calls } = makeClient({
       [V2_BY_URL]: [{ status: 401 }],
     });
-    await expect(getMediaByUrl(client, URL_IN)).rejects.toMatchObject({ code: "UPSTREAM_ERROR" });
+    await expect(getMediaByUrl(client, URL_IN)).rejects.toMatchObject({
+      code: "UPSTREAM_ERROR",
+      message: expect.stringMatching(/rejected our API key/),
+    });
     expect(calls).toHaveLength(1);
   });
 
